@@ -13,7 +13,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Panel for bulk set price fetching with multi-set selection
@@ -499,13 +498,7 @@ public class BulkPricerPanel extends JPanel {
                 publish(String.format("[%d/%d] Processing %s...", current, sets.size(), setCode));
 
                 try {
-                    String apiCode = SetList.getApiCode(setCode);
-
-                    List<Card> cards = apiService.fetchCardsFromSet(apiCode);
-
-                    for (Card card : cards) {
-                        card.setSetCode(setCode);
-                    }
+                    List<Card> cards = apiService.fetchCardsFromSet(setCode);
 
                     String filename = setCode.toUpperCase() + "_prices.csv";
                     csvService.exportCardsToCsv(cards, filename, format);
@@ -518,7 +511,7 @@ public class BulkPricerPanel extends JPanel {
                     successCount++;
 
                     if (current < sets.size()) {
-                        Thread.sleep(100);
+                        Thread.sleep(1000);
                     }
 
                 } catch (Exception e) {
@@ -538,7 +531,21 @@ public class BulkPricerPanel extends JPanel {
 
 
         private void createCombinedFiles() throws Exception {
-            new java.io.File("data").mkdirs();
+            java.io.File dataDir = new java.io.File("data");
+
+            if (!dataDir.exists()) {
+                dataDir.mkdir();
+            }
+
+            java.io.File combinedFileDir = new java.io.File("data/combined_files");
+            java.io.File pricesFileDir = new java.io.File("data/prices");
+
+            if (!combinedFileDir.exists()) {
+                dataDir.mkdir();
+            }
+            if (!pricesFileDir.exists()) {
+                dataDir.mkdir();
+            }
 
             int fileNumber = 0;
             int currentIndex = 0;
@@ -548,7 +555,7 @@ public class BulkPricerPanel extends JPanel {
                 List<com.cardpricer.model.CardEntry> batch =
                         allCardEntries.subList(currentIndex, endIndex);
 
-                String filename = String.format("data/%02d_combined_list.csv", fileNumber);
+                String filename = String.format("data/combined_files/%02d_combined_list.csv", fileNumber);
 
                 try (java.io.PrintWriter writer = new java.io.PrintWriter(
                         new java.io.FileWriter(filename))) {

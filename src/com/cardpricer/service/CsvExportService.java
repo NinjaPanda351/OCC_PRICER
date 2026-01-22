@@ -18,6 +18,7 @@ import java.util.List;
 public class CsvExportService {
 
     private static final String DATA_DIRECTORY = "data";
+    private static final String PRICES_DIRECTORY = "data/prices";
 
     public enum ExportFormat {
         IMPORT_UTILITY,  // Full format with department, category, artist, rarity, tax
@@ -34,6 +35,11 @@ public class CsvExportService {
         if (!dataDir.exists()) {
             dataDir.mkdir();
         }
+
+        java.io.File pricesDir = new java.io.File(PRICES_DIRECTORY);
+        if (!pricesDir.exists()) {
+            pricesDir.mkdir();
+        }
     }
 
     /**
@@ -48,7 +54,7 @@ public class CsvExportService {
      */
     public void exportCardsToCsv(List<Card> cards, String filename, ExportFormat format) throws IOException {
         ensureDataDirectoryExists();
-        String fullPath = DATA_DIRECTORY + "/" + filename;
+        String fullPath = PRICES_DIRECTORY + "/" + filename;
 
         // Convert cards to flattened entries
         List<CardEntry> entries = flattenCards(cards);

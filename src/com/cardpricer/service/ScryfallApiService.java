@@ -83,7 +83,7 @@ public class ScryfallApiService {
      * @return JSONObject containing the response
      * @throws ScryfallApiException if the call fails
      */
-    private JSONObject makeApiCall(String urlStr) throws ScryfallApiException {
+    public JSONObject makeApiCall(String urlStr) throws ScryfallApiException {
         HttpURLConnection conn = null;
         try {
             URI uri = new URI(urlStr);
@@ -134,7 +134,7 @@ public class ScryfallApiService {
      * @param json The JSON object from Scryfall API
      * @return A populated Card object
      */
-    private Card parseCardFromJson(JSONObject json) {
+    public Card parseCardFromJson(JSONObject json) {
         Card card = new Card();
 
         String rawCollectorNumber = json.getString("collector_number");
