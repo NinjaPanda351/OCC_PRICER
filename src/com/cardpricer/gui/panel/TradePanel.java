@@ -235,17 +235,19 @@ public class TradePanel extends JPanel {
     private JPanel createTablePanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
-        // Table with Condition column
-        String[] columns = {"Code", "Card Name", "Condition", "Price"};
+        // Table with checkbox and Condition column
+        String[] columns = {"☑", "Code", "Card Name", "Condition", "Price"};
         tableModel = new DefaultTableModel(columns, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
-                return column == 2 || column == 3; // Condition and Price columns are editable
+                return column == 0 || column == 3 || column == 4; // Checkbox, Condition and Price columns are editable
             }
 
             @Override
             public Class<?> getColumnClass(int column) {
-                if (column == 2) {
+                if (column == 0) {
+                    return Boolean.class; // Checkbox column
+                } else if (column == 3) {
                     return String.class; // Condition column
                 }
                 return super.getColumnClass(column);
@@ -255,14 +257,39 @@ public class TradePanel extends JPanel {
         cardTable = new JTable(tableModel);
         cardTable.setFont(cardTable.getFont().deriveFont(14f));
         cardTable.setRowHeight(32);
-        cardTable.getColumnModel().getColumn(0).setPreferredWidth(120);
-        cardTable.getColumnModel().getColumn(1).setPreferredWidth(350);
-        cardTable.getColumnModel().getColumn(2).setPreferredWidth(80);
-        cardTable.getColumnModel().getColumn(3).setPreferredWidth(100);
+        cardTable.getColumnModel().getColumn(0).setPreferredWidth(40);  // Checkbox
+        cardTable.getColumnModel().getColumn(1).setPreferredWidth(120); // Code
+        cardTable.getColumnModel().getColumn(2).setPreferredWidth(310); // Card Name
+        cardTable.getColumnModel().getColumn(3).setPreferredWidth(80);  // Condition
+        cardTable.getColumnModel().getColumn(4).setPreferredWidth(100); // Price
+
+        // Enable table sorting
+        cardTable.setAutoCreateRowSorter(true);
+
+        // Configure row sorter for proper price sorting
+        javax.swing.table.TableRowSorter<DefaultTableModel> sorter =
+                new javax.swing.table.TableRowSorter<>(tableModel);
+        cardTable.setRowSorter(sorter);
+
+        // Custom comparator for the Price column (column 4, was 3)
+        sorter.setComparator(4, new java.util.Comparator<String>() {
+            @Override
+            public int compare(String s1, String s2) {
+                try {
+                    // Remove $ and parse as BigDecimal for proper numeric sorting
+                    BigDecimal price1 = new BigDecimal(s1.replace("$", "").replace(",", "").trim());
+                    BigDecimal price2 = new BigDecimal(s2.replace("$", "").replace(",", "").trim());
+                    return price1.compareTo(price2);
+                } catch (Exception e) {
+                    // Fallback to string comparison if parsing fails
+                    return s1.compareTo(s2);
+                }
+            }
+        });
 
         // Set up condition dropdown
         JComboBox<String> conditionCombo = new JComboBox<>(CONDITIONS);
-        cardTable.getColumnModel().getColumn(2).setCellEditor(new DefaultCellEditor(conditionCombo));
+        cardTable.getColumnModel().getColumn(3).setCellEditor(new DefaultCellEditor(conditionCombo));
 
         // Add listener to condition dropdown to update price when changed
         conditionCombo.addActionListener(e -> {
@@ -278,7 +305,7 @@ public class TradePanel extends JPanel {
         });
 
         // Add cell editor that formats price on commit
-        cardTable.getColumnModel().getColumn(3).setCellEditor(new javax.swing.DefaultCellEditor(new JTextField()) {
+        cardTable.getColumnModel().getColumn(4).setCellEditor(new javax.swing.DefaultCellEditor(new JTextField()) {
             @Override
             public boolean stopCellEditing() {
                 String value = (String) getCellEditorValue();
@@ -320,7 +347,9 @@ public class TradePanel extends JPanel {
         deleteItem.addActionListener(e -> {
             int row = cardTable.getSelectedRow();
             if (row >= 0) {
-                String cardName = (String) tableModel.getValueAt(row, 1);
+                // Convert view row to model row since table might be sorted
+                int modelRow = cardTable.convertRowIndexToModel(row);
+                String cardName = (String) tableModel.getValueAt(modelRow, 2);
                 int confirm = JOptionPane.showConfirmDialog(
                         cardTable,
                         "Delete \"" + cardName + "\"?",
@@ -330,9 +359,9 @@ public class TradePanel extends JPanel {
                 );
 
                 if (confirm == JOptionPane.YES_OPTION) {
-                    receivedCards.remove(row);
-                    cardConditions.remove(row);
-                    tableModel.removeRow(row);
+                    receivedCards.remove(modelRow);
+                    cardConditions.remove(modelRow);
+                    tableModel.removeRow(modelRow);
                     updateSummary();
                 }
             }
@@ -364,18 +393,32 @@ public class TradePanel extends JPanel {
         });
 
         JScrollPane scrollPane = new JScrollPane(cardTable);
-        scrollPane.setBorder(BorderFactory.createTitledBorder("Received Cards"));
+        scrollPane.setBorder(BorderFactory.createTitledBorder("Received Cards (Click column headers to sort)"));
 
         panel.add(scrollPane, BorderLayout.CENTER);
 
-        // Remove button - modern flat style
-        JButton removeBtn = new JButton("Remove Selected");
-        removeBtn.setFocusPainted(false);
-        removeBtn.setPreferredSize(new Dimension(140, 32));
-        removeBtn.addActionListener(e -> removeSelected());
+        // Button panel with selection controls and remove button
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
 
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        buttonPanel.add(removeBtn);
+        JButton selectAllBtn = new JButton("Select All");
+        selectAllBtn.setFocusPainted(false);
+        selectAllBtn.setPreferredSize(new Dimension(100, 32));
+        selectAllBtn.addActionListener(e -> selectAllCards(true));
+
+        JButton deselectAllBtn = new JButton("Deselect All");
+        deselectAllBtn.setFocusPainted(false);
+        deselectAllBtn.setPreferredSize(new Dimension(110, 32));
+        deselectAllBtn.addActionListener(e -> selectAllCards(false));
+
+        JButton removeSelectedBtn = new JButton("Delete Selected");
+        removeSelectedBtn.setFocusPainted(false);
+        removeSelectedBtn.setPreferredSize(new Dimension(130, 32));
+        removeSelectedBtn.addActionListener(e -> removeSelectedCards());
+
+        buttonPanel.add(selectAllBtn);
+        buttonPanel.add(deselectAllBtn);
+        buttonPanel.add(removeSelectedBtn);
+
         panel.add(buttonPanel, BorderLayout.SOUTH);
 
         return panel;
@@ -595,6 +638,7 @@ public class TradePanel extends JPanel {
 
             // Add to table with NM condition by default
             tableModel.addRow(new Object[]{
+                    false,  // Checkbox unchecked by default
                     code,
                     "Misc Magic Card",
                     "NM",
@@ -707,6 +751,7 @@ public class TradePanel extends JPanel {
 
             // Add to table with NM condition by default
             tableModel.addRow(new Object[]{
+                    false,  // Checkbox unchecked by default
                     "MISC",
                     cardName,
                     "NM",
@@ -837,6 +882,7 @@ public class TradePanel extends JPanel {
         BigDecimal roundedPrice = applyPricingRules(item.getUnitPrice(), card.getRarity());
 
         tableModel.addRow(new Object[]{
+                false,  // Checkbox unchecked by default
                 code,
                 name.toString(),
                 "NM", // Default condition
@@ -857,9 +903,59 @@ public class TradePanel extends JPanel {
     private void removeSelected() {
         int row = cardTable.getSelectedRow();
         if (row >= 0) {
-            receivedCards.remove(row);
-            cardConditions.remove(row);
-            tableModel.removeRow(row);
+            // Convert view row to model row since table might be sorted
+            int modelRow = cardTable.convertRowIndexToModel(row);
+            receivedCards.remove(modelRow);
+            cardConditions.remove(modelRow);
+            tableModel.removeRow(modelRow);
+            updateSummary();
+        }
+    }
+
+    /**
+     * Selects or deselects all checkboxes
+     */
+    private void selectAllCards(boolean selected) {
+        for (int i = 0; i < tableModel.getRowCount(); i++) {
+            tableModel.setValueAt(selected, i, 0); // Column 0 is checkbox
+        }
+    }
+
+    /**
+     * Removes all cards that have their checkbox checked
+     */
+    private void removeSelectedCards() {
+        // Build list of model rows that are checked
+        List<Integer> rowsToDelete = new ArrayList<>();
+        for (int i = 0; i < tableModel.getRowCount(); i++) {
+            Boolean checked = (Boolean) tableModel.getValueAt(i, 0);
+            if (checked != null && checked) {
+                rowsToDelete.add(i);
+            }
+        }
+
+        if (rowsToDelete.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "No cards selected for deletion",
+                    "Nothing to Delete",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        int confirm = JOptionPane.showConfirmDialog(this,
+                String.format("Delete %d selected card(s)?", rowsToDelete.size()),
+                "Confirm Delete",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE);
+
+        if (confirm == JOptionPane.YES_OPTION) {
+            // Remove in reverse order to maintain indices
+            for (int i = rowsToDelete.size() - 1; i >= 0; i--) {
+                int row = rowsToDelete.get(i);
+                receivedCards.remove(row);
+                cardConditions.remove(row);
+                tableModel.removeRow(row);
+            }
             updateSummary();
         }
     }
@@ -868,14 +964,17 @@ public class TradePanel extends JPanel {
      * Updates the price for a specific row based on its condition
      */
     private void updatePriceForCondition(int row) {
-        if (row < 0 || row >= receivedCards.size()) {
+        // Convert view row to model row since table might be sorted
+        int modelRow = cardTable.convertRowIndexToModel(row);
+
+        if (modelRow < 0 || modelRow >= receivedCards.size()) {
             return;
         }
 
-        String condition = (String) tableModel.getValueAt(row, 2);
-        cardConditions.set(row, condition);
+        String condition = (String) tableModel.getValueAt(modelRow, 3); // Column 3 is Condition
+        cardConditions.set(modelRow, condition);
 
-        TradeItem item = receivedCards.get(row);
+        TradeItem item = receivedCards.get(modelRow);
         Card card = item.getCard();
 
         // Get base price (already rounded by pricing rules)
@@ -884,8 +983,8 @@ public class TradePanel extends JPanel {
         // Apply condition multiplier
         BigDecimal conditionPrice = applyConditionMultiplier(basePrice, condition);
 
-        // Update the price in the table
-        tableModel.setValueAt(String.format("$%.2f", conditionPrice), row, 3);
+        // Update the price in the table (Column 4 is Price)
+        tableModel.setValueAt(String.format("$%.2f", conditionPrice), modelRow, 4);
     }
 
     /**
@@ -926,7 +1025,7 @@ public class TradePanel extends JPanel {
 
         for (int i = 0; i < receivedCards.size(); i++) {
             // Get price directly from table (which may have been manually edited or adjusted by condition)
-            String priceStr = (String) tableModel.getValueAt(i, 3);
+            String priceStr = (String) tableModel.getValueAt(i, 4); // Column 4 is Price
             priceStr = priceStr.replace("$", "").trim();
 
             try {
@@ -1093,7 +1192,7 @@ public class TradePanel extends JPanel {
             }
 
             // Get price from table (may have been manually edited)
-            String priceStr = (String) tableModel.getValueAt(i, 3);
+            String priceStr = (String) tableModel.getValueAt(i, 4); // Column 4 is Price
             priceStr = priceStr.replace("$", "").trim();
 
             try {

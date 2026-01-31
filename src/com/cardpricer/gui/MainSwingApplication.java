@@ -2,6 +2,7 @@ package com.cardpricer.gui;
 
 import com.cardpricer.gui.panel.BulkPricerPanel;
 import com.cardpricer.gui.panel.TradePanel;
+import com.cardpricer.gui.panel.InventoryPanel;
 import com.formdev.flatlaf.FlatDarkLaf;
 
 import javax.swing.*;
@@ -22,6 +23,7 @@ public class MainSwingApplication {
     private static final String SCREEN_MANUAL = "manual";
     private static final String SCREEN_SEARCH = "search";
     private static final String SCREEN_TRADES = "trades";
+    private static final String SCREEN_INVENTORY = "inventory";
 
     public static void main(String[] args) {
         // 1) Set modern look & feel
@@ -53,6 +55,7 @@ public class MainSwingApplication {
         contentArea.add(createManualScreen(), SCREEN_MANUAL);
         contentArea.add(createComingSoonScreen("Card Search"), SCREEN_SEARCH);
         contentArea.add(createTradeScreen(), SCREEN_TRADES);
+        contentArea.add(createInventoryScreen(), SCREEN_INVENTORY);
 
         root.add(contentArea, BorderLayout.CENTER);
 
@@ -101,7 +104,8 @@ public class MainSwingApplication {
         JToggleButton btnBulk = createNavToggle("Set Pricer", navGroup, () -> showScreen(SCREEN_BULK, "Set Pricer - Ready to process sets"));
         JToggleButton btnManual = createNavToggle("Manual Entry", navGroup, () -> showScreen(SCREEN_MANUAL, "Manual Entry - Ready to add cards"));
         JToggleButton btnSearch = createNavToggle("Card Search", navGroup, () -> showScreen(SCREEN_SEARCH, "Card Search - Coming soon"));
-        JToggleButton btnTrades = createNavToggle("Trades", navGroup, () -> showScreen(SCREEN_TRADES, "Trade Management - Coming soon"));
+        JToggleButton btnTrades = createNavToggle("Trades", navGroup, () -> showScreen(SCREEN_TRADES, "Trade Management"));
+        JToggleButton btnInventory = createNavToggle("Inventory Update", navGroup, () -> showScreen(SCREEN_INVENTORY, "Inventory Update - Set card quantities"));
 
         sidebar.add(btnHome);
         sidebar.add(Box.createVerticalStrut(6));
@@ -112,6 +116,8 @@ public class MainSwingApplication {
         sidebar.add(btnSearch);
         sidebar.add(Box.createVerticalStrut(6));
         sidebar.add(btnTrades);
+        sidebar.add(Box.createVerticalStrut(6));
+        sidebar.add(btnInventory);
 
         sidebar.add(Box.createVerticalGlue());
         sidebar.add(Box.createVerticalStrut(10));
@@ -232,6 +238,10 @@ public class MainSwingApplication {
 
     private JPanel createTradeScreen() {
         return new TradePanel();
+    }
+
+    private JPanel createInventoryScreen() {
+        return new InventoryPanel();
     }
 
     private JPanel createManualScreen() {
