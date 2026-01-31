@@ -18,10 +18,20 @@ public class TradeReceivingExportService {
 
     private static final String DATA_DIRECTORY = "data/trades";
 
+    // Condition multipliers (NM = 1.0, each tier = 0.8 of previous)
+    private static final String[] CONDITIONS = {"NM", "LP", "MP", "HP", "DMG"};
+    private static final double[] CONDITION_MULTIPLIERS = {
+            1.0,    // NM - Market Price
+            0.8,    // LP - 80% of NM
+            0.64,   // MP - 80% of LP
+            0.512,  // HP - 80% of MP
+            0.4096  // DMG - 80% of HP
+    };
+
     private void ensureDataDirectoryExists() {
         java.io.File dataDir = new java.io.File(DATA_DIRECTORY);
         if (!dataDir.exists()) {
-            dataDir.mkdir();
+            dataDir.mkdirs(); // Use mkdirs() to create parent directories too
         }
     }
 
@@ -149,15 +159,22 @@ public class TradeReceivingExportService {
      *
      * @param items List of received cards
      * @param traderName Name of trader/source
+     * @param customerName Name of customer
+     * @param driversLicense Driver's license number
+     * @param checkNumber Check number (if applicable)
+     * @param isStoreCredit Whether payment is store credit (true) or check (false)
+     * @param conditions List of conditions for each card
      * @return The filename of the saved list
      */
-    public String saveCardList(List<TradeItem> items, String traderName) throws IOException {
+    public String saveCardList(List<TradeItem> items, String traderName, String customerName,
+                               String driversLicense, String checkNumber, boolean isStoreCredit,
+                               List<String> conditions) throws IOException {
         ensureDataDirectoryExists();
 
         String timestamp = LocalDateTime.now().format(
-                DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-        String safeName = sanitizeFilename(traderName);
-        String filename = String.format("%s/cardlist_%s_%s.txt",
+                DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String safeName = sanitizeFilename(customerName);
+        String filename = String.format("%s/%s_%s.txt",
                 DATA_DIRECTORY, timestamp, safeName);
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
@@ -166,15 +183,29 @@ public class TradeReceivingExportService {
             writer.println("╚════════════════════════════════════════════════════════════╝");
             writer.println();
 
-            writer.println("Source: " + traderName);
+            writer.println("Customer Name: " + customerName);
+            writer.println("Trader Name: " + (traderName != null && !traderName.isEmpty() ? traderName : "N/A"));
+            writer.println("Driver's License: " + (driversLicense != null && !driversLicense.isEmpty() ? driversLicense : "N/A"));
+            writer.println("Payment Method: " + (isStoreCredit ? "Store Credit (50%)" : "Check (33%)"));
+            if (!isStoreCredit && checkNumber != null && !checkNumber.isEmpty()) {
+                writer.println("Check Number: " + checkNumber);
+            }
             writer.println("Date: " + LocalDateTime.now().format(
                     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
             writer.println("Total Cards: " + items.size());
 
             BigDecimal totalValue = BigDecimal.ZERO;
-            for (TradeItem item : items) {
+            for (int i = 0; i < items.size(); i++) {
+                TradeItem item = items.get(i);
                 Card card = item.getCard();
                 BigDecimal roundedPrice = applyPricingRules(item.getUnitPrice(), card.getRarity());
+
+                // Apply condition multiplier if conditions list is provided
+                if (conditions != null && i < conditions.size()) {
+                    String condition = conditions.get(i);
+                    roundedPrice = applyConditionMultiplier(roundedPrice, condition);
+                }
+
                 totalValue = totalValue.add(roundedPrice.multiply(BigDecimal.valueOf(item.getQuantity())));
             }
 
@@ -187,10 +218,11 @@ public class TradeReceivingExportService {
             writer.println("\n" + "=".repeat(70));
             writer.println("CARD LIST");
             writer.println("=".repeat(70));
-            writer.printf("%-15s %-40s %-10s%n", "Code", "Card Name", "Price");
+            writer.printf("%-15s %-35s %-8s %-10s%n", "Code", "Card Name", "Condition", "Price");
             writer.println("-".repeat(70));
 
-            for (TradeItem item : items) {
+            for (int i = 0; i < items.size(); i++) {
+                TradeItem item = items.get(i);
                 Card card = item.getCard();
 
                 StringBuilder codeBuilder = new StringBuilder();
@@ -213,9 +245,17 @@ public class TradeReceivingExportService {
                 // Apply pricing rules
                 BigDecimal roundedPrice = applyPricingRules(item.getUnitPrice(), card.getRarity());
 
-                writer.printf("%-15s %-40s $%-9.2f%n",
+                // Get condition and apply multiplier
+                String condition = "NM";
+                if (conditions != null && i < conditions.size()) {
+                    condition = conditions.get(i);
+                    roundedPrice = applyConditionMultiplier(roundedPrice, condition);
+                }
+
+                writer.printf("%-15s %-35s %-8s $%-9.2f%n",
                         codeBuilder.toString(),
-                        truncate(nameBuilder.toString(), 40),
+                        truncate(nameBuilder.toString(), 35),
+                        condition,
                         roundedPrice);
             }
 
@@ -274,5 +314,38 @@ public class TradeReceivingExportService {
             return "\"" + escaped + "\"";
         }
         return escaped;
+    }
+
+    /**
+     * Applies condition multiplier to a price and re-applies rounding rules
+     */
+    private BigDecimal applyConditionMultiplier(BigDecimal basePrice, String condition) {
+        int conditionIndex = getConditionIndex(condition);
+        double multiplier = CONDITION_MULTIPLIERS[conditionIndex];
+
+        BigDecimal adjustedPrice = basePrice.multiply(BigDecimal.valueOf(multiplier));
+
+        // Re-apply rounding rules to the condition-adjusted price
+        if (adjustedPrice.compareTo(BigDecimal.TEN) < 0) {
+            // Below $10 - round to nearest $0.50
+            BigDecimal rounded = adjustedPrice.divide(new BigDecimal("0.5"), 0, java.math.RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal("0.5"));
+            return rounded;
+        } else {
+            // $10 and above - round to nearest $1.00
+            return adjustedPrice.setScale(0, java.math.RoundingMode.HALF_UP);
+        }
+    }
+
+    /**
+     * Gets the index of a condition in the CONDITIONS array
+     */
+    private int getConditionIndex(String condition) {
+        for (int i = 0; i < CONDITIONS.length; i++) {
+            if (CONDITIONS[i].equals(condition)) {
+                return i;
+            }
+        }
+        return 0; // Default to NM
     }
 }
