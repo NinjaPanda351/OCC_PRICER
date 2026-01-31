@@ -1,2 +1,8 @@
 v1.0.0
 - Initial Release
+v1.0.1
+- Created Trade Panel
+v1.0.2
+- Updated Trade Panel
+v1.0.3
+- Created Inventory Panel
