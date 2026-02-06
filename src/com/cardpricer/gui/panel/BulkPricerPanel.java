@@ -498,7 +498,9 @@ public class BulkPricerPanel extends JPanel {
                 publish(String.format("[%d/%d] Processing %s...", current, sets.size(), setCode));
 
                 try {
-                    List<Card> cards = apiService.fetchCardsFromSet(setCode);
+                    // Convert our custom code to Scryfall API code (e.g., COK -> chk)
+                    String apiSetCode = SetList.toScryfallCode(setCode);
+                    List<Card> cards = apiService.fetchCardsFromSet(apiSetCode);
 
                     String filename = setCode.toUpperCase() + "_prices.csv";
                     csvService.exportCardsToCsv(cards, filename, format);
@@ -541,10 +543,10 @@ public class BulkPricerPanel extends JPanel {
             java.io.File pricesFileDir = new java.io.File("data/prices");
 
             if (!combinedFileDir.exists()) {
-                dataDir.mkdir();
+                combinedFileDir.mkdir(); // FIX: was dataDir.mkdir()
             }
             if (!pricesFileDir.exists()) {
-                dataDir.mkdir();
+                pricesFileDir.mkdir(); // FIX: was dataDir.mkdir()
             }
 
             int fileNumber = 0;

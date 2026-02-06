@@ -1,8 +1,9 @@
 package com.cardpricer.gui;
 
 import com.cardpricer.gui.panel.BulkPricerPanel;
-import com.cardpricer.gui.panel.TradePanel;
+import com.cardpricer.gui.panel.FileManagerPanel;
 import com.cardpricer.gui.panel.InventoryPanel;
+import com.cardpricer.gui.panel.TradePanel;
 import com.formdev.flatlaf.FlatDarkLaf;
 
 import javax.swing.*;
@@ -17,11 +18,16 @@ public class MainSwingApplication {
     private CardLayout cardLayout;       // screen switching
     private JLabel statusLabel;
 
+    // Lazy-loaded panels (only created when first accessed)
+    private JPanel bulkPricerPanel;
+    private JPanel tradePanel;
+    private JPanel fileManagerPanel;
+    private JPanel inventoryPanel;
+
     // Screen keys
     private static final String SCREEN_HOME = "home";
     private static final String SCREEN_BULK = "bulk";
-    private static final String SCREEN_MANUAL = "manual";
-    private static final String SCREEN_SEARCH = "search";
+    private static final String SCREEN_FILES = "files";
     private static final String SCREEN_TRADES = "trades";
     private static final String SCREEN_INVENTORY = "inventory";
 
@@ -50,12 +56,14 @@ public class MainSwingApplication {
         contentArea = new JPanel(cardLayout);
         contentArea.setBorder(new EmptyBorder(20, 20, 20, 20));
 
+        // Only create home screen initially - others are lazy-loaded
         contentArea.add(createHomeScreen(), SCREEN_HOME);
-        contentArea.add(createBulkScreen(), SCREEN_BULK);
-        contentArea.add(createManualScreen(), SCREEN_MANUAL);
-        contentArea.add(createComingSoonScreen("Card Search"), SCREEN_SEARCH);
-        contentArea.add(createTradeScreen(), SCREEN_TRADES);
-        contentArea.add(createInventoryScreen(), SCREEN_INVENTORY);
+
+        // Add placeholder panels for other screens (will be replaced on first access)
+        contentArea.add(new JPanel(), SCREEN_BULK);
+        contentArea.add(new JPanel(), SCREEN_FILES);
+        contentArea.add(new JPanel(), SCREEN_TRADES);
+        contentArea.add(new JPanel(), SCREEN_INVENTORY);
 
         root.add(contentArea, BorderLayout.CENTER);
 
@@ -102,18 +110,15 @@ public class MainSwingApplication {
 
         JToggleButton btnHome = createNavToggle("Home", navGroup, () -> showScreen(SCREEN_HOME, "Ready"));
         JToggleButton btnBulk = createNavToggle("Set Pricer", navGroup, () -> showScreen(SCREEN_BULK, "Set Pricer - Ready to process sets"));
-        JToggleButton btnManual = createNavToggle("Manual Entry", navGroup, () -> showScreen(SCREEN_MANUAL, "Manual Entry - Ready to add cards"));
-        JToggleButton btnSearch = createNavToggle("Card Search", navGroup, () -> showScreen(SCREEN_SEARCH, "Card Search - Coming soon"));
-        JToggleButton btnTrades = createNavToggle("Trades", navGroup, () -> showScreen(SCREEN_TRADES, "Trade Management"));
+        JToggleButton btnFiles = createNavToggle("File Manager", navGroup, () -> showScreen(SCREEN_FILES, "File Manager - Download generated files"));
+        JToggleButton btnTrades = createNavToggle("Trades", navGroup, () -> showScreen(SCREEN_TRADES, "Trade Management - Ready"));
         JToggleButton btnInventory = createNavToggle("Inventory Update", navGroup, () -> showScreen(SCREEN_INVENTORY, "Inventory Update - Set card quantities"));
 
         sidebar.add(btnHome);
         sidebar.add(Box.createVerticalStrut(6));
         sidebar.add(btnBulk);
         sidebar.add(Box.createVerticalStrut(6));
-        sidebar.add(btnManual);
-        sidebar.add(Box.createVerticalStrut(6));
-        sidebar.add(btnSearch);
+        sidebar.add(btnFiles);
         sidebar.add(Box.createVerticalStrut(6));
         sidebar.add(btnTrades);
         sidebar.add(Box.createVerticalStrut(6));
@@ -177,7 +182,7 @@ public class MainSwingApplication {
         statusLabel = new JLabel("Ready");
         statusLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
 
-        JLabel version = new JLabel("v1.0.0");
+        JLabel version = new JLabel("v1.0.4");
         version.setForeground(UIManager.getColor("Label.disabledForeground"));
 
         status.add(statusLabel, BorderLayout.WEST);
@@ -244,25 +249,8 @@ public class MainSwingApplication {
         return new InventoryPanel();
     }
 
-    private JPanel createManualScreen() {
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-
-        JLabel title = new JLabel("Manual Card Entry");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 22f));
-
-        JLabel subtitle = new JLabel("Enter cards one by one using set codes");
-        subtitle.setForeground(UIManager.getColor("Label.disabledForeground"));
-
-        JLabel msg = new JLabel("🚧 Manual entry system coming soon!");
-        msg.setBorder(new EmptyBorder(16, 0, 0, 0));
-
-        panel.add(title);
-        panel.add(Box.createVerticalStrut(6));
-        panel.add(subtitle);
-        panel.add(Box.createVerticalStrut(8));
-        panel.add(msg);
-        return panel;
+    private JPanel createFileManagerScreen() {
+        return new FileManagerPanel();
     }
 
     private JPanel createComingSoonScreen(String featureName) {
@@ -304,7 +292,188 @@ public class MainSwingApplication {
     }
 
     private void showScreen(String screenKey, String status) {
+        // Smart memory management: unload panels that aren't being viewed (except those with active work)
+        unloadInactivePanels(screenKey);
+
+        // Lazy load panels on first access
+        boolean needsRevalidate = false;
+
+        switch (screenKey) {
+            case SCREEN_BULK:
+                if (bulkPricerPanel == null) {
+                    bulkPricerPanel = createBulkScreen();
+                    // Remove all components and re-add with real panel
+                    Component[] components = contentArea.getComponents();
+                    for (int i = 0; i < components.length; i++) {
+                        Component comp = components[i];
+                        // Check if this is the bulk screen position (index 1)
+                        if (i == 1) { // SCREEN_BULK is second component
+                            contentArea.remove(comp);
+                            contentArea.add(bulkPricerPanel, SCREEN_BULK, i);
+                            needsRevalidate = true;
+                            break;
+                        }
+                    }
+                }
+                break;
+
+            case SCREEN_FILES:
+                if (fileManagerPanel == null) {
+                    fileManagerPanel = createFileManagerScreen();
+                    Component[] components = contentArea.getComponents();
+                    for (int i = 0; i < components.length; i++) {
+                        if (i == 2) { // SCREEN_FILES is third component
+                            contentArea.remove(components[i]);
+                            contentArea.add(fileManagerPanel, SCREEN_FILES, i);
+                            needsRevalidate = true;
+                            break;
+                        }
+                    }
+                }
+                break;
+
+            case SCREEN_TRADES:
+                if (tradePanel == null) {
+                    tradePanel = createTradeScreen();
+                    Component[] components = contentArea.getComponents();
+                    for (int i = 0; i < components.length; i++) {
+                        if (i == 3) { // SCREEN_TRADES is fourth component
+                            contentArea.remove(components[i]);
+                            contentArea.add(tradePanel, SCREEN_TRADES, i);
+                            needsRevalidate = true;
+                            break;
+                        }
+                    }
+                }
+                break;
+
+            case SCREEN_INVENTORY:
+                if (inventoryPanel == null) {
+                    inventoryPanel = createInventoryScreen();
+                    Component[] components = contentArea.getComponents();
+                    for (int i = 0; i < components.length; i++) {
+                        if (i == 4) { // SCREEN_INVENTORY is fifth component
+                            contentArea.remove(components[i]);
+                            contentArea.add(inventoryPanel, SCREEN_INVENTORY, i);
+                            needsRevalidate = true;
+                            break;
+                        }
+                    }
+                }
+                break;
+        }
+
+        if (needsRevalidate) {
+            contentArea.revalidate();
+            contentArea.repaint();
+        }
+
         cardLayout.show(contentArea, screenKey);
         statusLabel.setText(status);
+    }
+
+    /**
+     * Unloads inactive panels to free memory, but preserves panels with active work
+     */
+    private void unloadInactivePanels(String activeScreenKey) {
+        // File Manager - always safe to unload (no state to preserve)
+        if (!SCREEN_FILES.equals(activeScreenKey) && fileManagerPanel != null) {
+            Component[] components = contentArea.getComponents();
+            for (int i = 0; i < components.length; i++) {
+                if (i == 2) { // SCREEN_FILES position
+                    contentArea.remove(components[i]);
+                    contentArea.add(new JPanel(), SCREEN_FILES, i);
+                    fileManagerPanel = null;
+                    break;
+                }
+            }
+        }
+
+        // Bulk Pricer - only unload if NOT currently processing
+        if (!SCREEN_BULK.equals(activeScreenKey) && bulkPricerPanel != null) {
+            // Check if bulk pricer is currently processing
+            boolean isProcessing = isBulkPricerProcessing();
+            if (!isProcessing) {
+                Component[] components = contentArea.getComponents();
+                for (int i = 0; i < components.length; i++) {
+                    if (i == 1) { // SCREEN_BULK position
+                        contentArea.remove(components[i]);
+                        contentArea.add(new JPanel(), SCREEN_BULK, i);
+                        bulkPricerPanel = null;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Inventory - only unload if no cards loaded
+        if (!SCREEN_INVENTORY.equals(activeScreenKey) && inventoryPanel != null) {
+            boolean hasLoadedCards = isInventoryPanelLoaded();
+            if (!hasLoadedCards) {
+                Component[] components = contentArea.getComponents();
+                for (int i = 0; i < components.length; i++) {
+                    if (i == 4) { // SCREEN_INVENTORY position (now index 4)
+                        contentArea.remove(components[i]);
+                        contentArea.add(new JPanel(), SCREEN_INVENTORY, i);
+                        inventoryPanel = null;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Trade Panel - NEVER unload (always keep trade data)
+        // This ensures user never loses trade work in progress
+    }
+
+    /**
+     * Checks if bulk pricer is currently processing sets
+     */
+    private boolean isBulkPricerProcessing() {
+        if (bulkPricerPanel == null) return false;
+
+        try {
+            // Use reflection to check if worker is running
+            java.lang.reflect.Field[] fields = bulkPricerPanel.getClass().getDeclaredFields();
+            for (java.lang.reflect.Field field : fields) {
+                if (field.getName().contains("worker") || field.getName().contains("Worker")) {
+                    field.setAccessible(true);
+                    Object worker = field.get(bulkPricerPanel);
+                    if (worker instanceof SwingWorker) {
+                        SwingWorker<?, ?> sw = (SwingWorker<?, ?>) worker;
+                        return !sw.isDone();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // If reflection fails, assume not processing
+        }
+
+        return false;
+    }
+
+    /**
+     * Checks if inventory panel has loaded cards
+     */
+    private boolean isInventoryPanelLoaded() {
+        if (inventoryPanel == null) return false;
+
+        try {
+            // Use reflection to check if cards are loaded
+            java.lang.reflect.Field loadedCardsField = inventoryPanel.getClass().getDeclaredField("loadedCards");
+            loadedCardsField.setAccessible(true);
+            Object loadedCardsObj = loadedCardsField.get(inventoryPanel);
+
+            // Check using reflection methods instead of casting to List<?>
+            if (loadedCardsObj != null) {
+                java.lang.reflect.Method sizeMethod = loadedCardsObj.getClass().getMethod("size");
+                Integer size = (Integer) sizeMethod.invoke(loadedCardsObj);
+                return size != null && size > 0;
+            }
+            return false;
+        } catch (Exception e) {
+            // If reflection fails, assume not loaded (safe to unload)
+            return false;
+        }
     }
 }

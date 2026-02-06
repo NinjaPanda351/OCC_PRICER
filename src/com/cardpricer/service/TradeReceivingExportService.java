@@ -96,14 +96,14 @@ public class TradeReceivingExportService {
 
                 // Apply pricing rules
                 BigDecimal roundedPrice = applyPricingRules(item.getUnitPrice(), card.getRarity());
-                BigDecimal cost = roundedPrice;
+                BigDecimal cost = roundedPrice.divide(new BigDecimal(2));
                 BigDecimal price = roundedPrice;
                 BigDecimal extendedCost = cost.multiply(BigDecimal.valueOf(qtyOnOrder));
 
                 // LINE NO,DEPARTMENT,CATEGORY,TYPE,CODE,ITEM TYPE,ORDER NO,DESCRIPTION,UOM,
                 // QTY ON ORD,RESTOCK LEVEL,REORDER POINT,QTY ON HAND,COST,DISCOUNT,BID,
                 // EXTENDED COST,TAX CODE,PRICE
-                writer.printf("%d,5,5.2,,%s,,%s,%s,,%d,,,%.2f,,,%.2f,TAX,%.2f%n",
+                writer.printf("%d,5,5.2,,%s,,%s,%s,,%d,,,,%.2f,,,%.2f,TAX,%.2f%n",
                         lineNo++,               // LINE NO
                         code,                   // CODE (required)
                         "",                     // ORDER NO (can be populated with trader name if needed)
@@ -171,9 +171,10 @@ public class TradeReceivingExportService {
                                List<String> conditions) throws IOException {
         ensureDataDirectoryExists();
 
-        String timestamp = LocalDateTime.now().format(
-                DateTimeFormatter.ofPattern("yyyyMMdd"));
-        String safeName = sanitizeFilename(customerName);
+        // New format: YYYY-MM-DD_HH-MM-SS_CUSTOMER_NAME
+        LocalDateTime now = LocalDateTime.now();
+        String timestamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+        String safeName = sanitizeFilename(customerName.isEmpty() ? "UNKNOWN" : customerName).toUpperCase();
         String filename = String.format("%s/%s_%s.txt",
                 DATA_DIRECTORY, timestamp, safeName);
 
@@ -347,5 +348,66 @@ public class TradeReceivingExportService {
             }
         }
         return 0; // Default to NM
+    }
+
+    /**
+     * Exports trade items directly to inventory format (Item Wizard Change Qty)
+     * Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
+     */
+    public String exportToInventoryFormat(List<TradeItem> items, List<String> conditions,
+                                          List<Integer> quantities) throws IOException {
+        ensureDataDirectoryExists();
+
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String filename = String.format("%s/inventory_from_trade_%s.csv", DATA_DIRECTORY, timestamp);
+
+        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+            // No header for Item Wizard Change Qty format
+
+            for (int i = 0; i < items.size(); i++) {
+                TradeItem item = items.get(i);
+                Card card = item.getCard();
+
+                // Skip MISC cards
+                if ("MISC".equals(card.getSetCode())) {
+                    continue;
+                }
+
+                String code = card.getSetCode() + " " + card.getCollectorNumber();
+                if (item.isFoil()) {
+                    code += "F";
+                }
+
+                String cardName = card.getName();
+                String artist = card.getArtist() != null ? card.getArtist() : "";
+                int quantity = i < quantities.size() ? quantities.get(i) : 1;
+
+                writer.println(formatChangeQtyRow(code, cardName, artist, quantity));
+            }
+        }
+
+        return filename;
+    }
+
+    /**
+     * Formats a row for Item Wizard Change Qty format
+     * Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
+     */
+    private String formatChangeQtyRow(String code, String cardName, String artist, int newQty) {
+        // Escape and quote card name if needed
+        String escapedName = cardName.replace("\"", "\"\"");
+        String description = escapedName.contains(",") ? "\"" + escapedName + "\"" : escapedName;
+
+        // Escape and quote artist if needed
+        String escapedArtist = artist.replace("\"", "\"\"");
+        String extendedDesc = escapedArtist.contains(",") ? "\"" + escapedArtist + "\"" : escapedArtist;
+
+        // Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
+        // We leave ON_HAND-QTY empty (they'll fill it in from current inventory)
+        return String.format("%s,%s,%s,,%d",
+                code,
+                description,
+                extendedDesc,
+                newQty);
     }
 }

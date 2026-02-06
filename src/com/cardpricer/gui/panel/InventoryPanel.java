@@ -265,7 +265,9 @@ public class InventoryPanel extends JPanel {
         SwingWorker<List<Card>, Void> worker = new SwingWorker<>() {
             @Override
             protected List<Card> doInBackground() throws Exception {
-                return apiService.fetchCardsFromSet(selectedSet);
+                // Convert custom code to Scryfall API code (e.g., COK -> chk)
+                String apiSetCode = SetList.toScryfallCode(selectedSet);
+                return apiService.fetchCardsFromSet(apiSetCode);
             }
 
             @Override

@@ -81,7 +81,14 @@ public class CardSearchDialog extends JDialog {
             public void keyReleased(KeyEvent e) {
                 if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
                     dispose();
-                } else if (e.getKeyCode() != KeyEvent.VK_ENTER) {
+                } else if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                    // Enter key triggers immediate search
+                    if (searchTimer != null) {
+                        searchTimer.stop();
+                    }
+                    performSearch();
+                } else {
+                    // Other keys schedule debounced search
                     scheduleSearch();
                 }
             }
