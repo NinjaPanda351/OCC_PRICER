@@ -1245,23 +1245,8 @@ public class TradePanel extends JPanel {
         return 0; // Default to NM
     }
 
-    private BigDecimal cachedTotal = null;
-    private int cachedTotalQty = 0;
-    private boolean summaryNeedsRecalculation = true;
-
-    /**
-     * Mark summary as needing recalculation
-     */
-    private void invalidateSummary() {
-        summaryNeedsRecalculation = true;
-    }
-
     private void updateSummary() {
-        // Performance optimization: skip recalculation if not needed
-        if (!summaryNeedsRecalculation && cachedTotal != null) {
-            return;
-        }
-
+        // Always recalculate - the cache optimization was causing issues
         BigDecimal total = BigDecimal.ZERO;
         int totalQty = 0;
 
@@ -1269,21 +1254,23 @@ public class TradePanel extends JPanel {
         for (int i = 0; i < rowCount; i++) {
             // Get total directly from table (Column 6 is Total)
             String totalStr = (String) tableModel.getValueAt(i, 6);
-            totalStr = totalStr.replace("$", "").trim();
+            totalStr = totalStr.replace("$", "").replace(",", "").trim();
 
             try {
                 BigDecimal rowTotal = new BigDecimal(totalStr);
                 total = total.add(rowTotal);
 
                 // Get qty from table (Column 4 is Qty)
-                int qty = (Integer) tableModel.getValueAt(i, 4);
+                Object qtyObj = tableModel.getValueAt(i, 4);
+                int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
                 totalQty += qty;
             } catch (Exception e) {
                 // If parsing fails, calculate from unit price and qty
                 try {
                     String unitPriceStr = (String) tableModel.getValueAt(i, 5);
-                    int qty = (Integer) tableModel.getValueAt(i, 4);
-                    BigDecimal unitPrice = new BigDecimal(unitPriceStr.replace("$", "").trim());
+                    Object qtyObj = tableModel.getValueAt(i, 4);
+                    int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
+                    BigDecimal unitPrice = new BigDecimal(unitPriceStr.replace("$", "").replace(",", "").trim());
                     total = total.add(unitPrice.multiply(BigDecimal.valueOf(qty)));
                     totalQty += qty;
                 } catch (Exception ex) {
@@ -1298,11 +1285,6 @@ public class TradePanel extends JPanel {
         totalPriceLabel.setText(String.format("TOTAL: $%.2f (%d cards)", total, totalQty));
         halfRateLabel.setText(String.format("HALF RATE (50%%): $%.2f", halfRate));
         thirdRateLabel.setText(String.format("THIRD RATE (33%%): $%.2f", thirdRate));
-
-        // Cache results
-        cachedTotal = total;
-        cachedTotalQty = totalQty;
-        summaryNeedsRecalculation = false;
     }
 
     private void clearAll() {
@@ -1680,9 +1662,6 @@ public class TradePanel extends JPanel {
         BigDecimal unitPrice = new BigDecimal(unitPriceStr.replace("$", "").trim());
         BigDecimal total = unitPrice.multiply(BigDecimal.valueOf(qty));
         tableModel.setValueAt(String.format("$%.2f", total), row, 6);
-
-        // Invalidate summary cache
-        invalidateSummary();
     }
 
     /**
