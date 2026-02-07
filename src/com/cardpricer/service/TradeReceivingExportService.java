@@ -47,6 +47,111 @@ public class TradeReceivingExportService {
      * @param traderName Name of trader/source
      * @return The filename of the exported CSV
      */
+    /**
+     * Exports received cards to POS inventory import CSV format using table values
+     * Format: LINE NO,DEPARTMENT,CATEGORY,TYPE,CODE,ITEM TYPE,ORDER NO,DESCRIPTION,UOM,
+     *         QTY ON ORD,RESTOCK LEVEL,REORDER POINT,QTY ON HAND,COST,DISCOUNT,BID,
+     *         EXTENDED COST,TAX CODE,PRICE
+     *
+     * Required fields: CODE, QTY ON ORD, COST
+     *
+     * @param items List of received cards
+     * @param traderName Name of trader/source
+     * @param unitPrices Actual unit prices from table (already condition-adjusted)
+     * @param quantities Actual quantities from table
+     * @param paymentType Payment type: "credit" (50%), "check" (33%), or "inventory" (0%)
+     * @return The filename of the exported CSV
+     */
+    public String exportToPOSFormat(List<TradeItem> items, String traderName,
+                                    List<BigDecimal> unitPrices, List<Integer> quantities,
+                                    String paymentType) throws IOException {
+        ensureDataDirectoryExists();
+
+        String timestamp = LocalDateTime.now().format(
+                DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String safeName = sanitizeFilename(traderName);
+        String filename = String.format("%s/pos_import_%s_%s.csv",
+                DATA_DIRECTORY, timestamp, safeName);
+
+        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+            // Write header
+            writer.println("LINE NO,DEPARTMENT,CATEGORY,TYPE,CODE,ITEM TYPE,ORDER NO," +
+                    "DESCRIPTION,UOM,QTY ON ORD,RESTOCK LEVEL,REORDER POINT," +
+                    "QTY ON HAND,COST,DISCOUNT,BID,EXTENDED COST,TAX CODE,PRICE");
+
+            int lineNo = 1;
+            for (int i = 0; i < items.size(); i++) {
+                TradeItem item = items.get(i);
+                Card card = item.getCard();
+
+                // Build code with finish indicator
+                StringBuilder codeBuilder = new StringBuilder();
+                codeBuilder.append(card.getSetCode())
+                        .append(" ")
+                        .append(card.getCollectorNumber());
+
+                if (item.isFoil()) {
+                    codeBuilder.append("F"); // Generic foil/etched indicator
+                }
+
+                String code = codeBuilder.toString();
+
+                // Build description
+                StringBuilder descBuilder = new StringBuilder();
+                descBuilder.append(card.getName());
+
+                if (card.getFrameEffectDisplay() != null) {
+                    descBuilder.append(" - ").append(card.getFrameEffects());
+                }
+
+                if (item.isFoil()) {
+                    descBuilder.append(" (Foil)");
+                }
+
+                String description = escapeCSV(descBuilder.toString());
+
+                // Use actual table values
+                int qtyOnOrder = quantities.get(i);
+                BigDecimal price = unitPrices.get(i); // Market price
+
+                // Calculate cost based on payment type
+                BigDecimal cost;
+                if ("inventory".equalsIgnoreCase(paymentType)) {
+                    cost = BigDecimal.ZERO; // Inventory = no cost
+                } else if ("check".equalsIgnoreCase(paymentType)) {
+                    cost = price.multiply(new BigDecimal("0.33")).setScale(2, java.math.RoundingMode.HALF_UP); // 33%
+                } else {
+                    // Default to store credit
+                    cost = price.multiply(new BigDecimal("0.50")).setScale(2, java.math.RoundingMode.HALF_UP); // 50%
+                }
+
+                BigDecimal extendedCost = cost.multiply(BigDecimal.valueOf(qtyOnOrder));
+
+                // LINE NO,DEPARTMENT,CATEGORY,TYPE,CODE,ITEM TYPE,ORDER NO,DESCRIPTION,UOM,
+                // QTY ON ORD,RESTOCK LEVEL,REORDER POINT,QTY ON HAND,COST,DISCOUNT,BID,
+                // EXTENDED COST,TAX CODE,PRICE
+                writer.printf("%d,5,5.2,,%s,,%s,%s,,%d,,,%.2f,,,%.2f,TAX,%.2f%n",
+                        lineNo++,               // LINE NO
+                        code,                   // CODE (required)
+                        "",                     // ORDER NO
+                        quoteIfNeeded(description), // DESCRIPTION
+                        qtyOnOrder,             // QTY ON ORD (required)
+                        cost,                   // COST (required)
+                        extendedCost,           // EXTENDED COST
+                        price                   // PRICE
+                );
+            }
+        }
+
+        System.out.println("POS import file created: " + filename);
+        return filename;
+    }
+
+    /**
+     * Legacy method - delegates to new method with recalculated values
+     * @deprecated Use exportToPOSFormat with unitPrices and quantities parameters
+     */
+    @Deprecated
     public String exportToPOSFormat(List<TradeItem> items, String traderName) throws IOException {
         ensureDataDirectoryExists();
 
@@ -96,14 +201,14 @@ public class TradeReceivingExportService {
 
                 // Apply pricing rules
                 BigDecimal roundedPrice = applyPricingRules(item.getUnitPrice(), card.getRarity());
-                BigDecimal cost = roundedPrice.divide(new BigDecimal(2));
+                BigDecimal cost = roundedPrice;
                 BigDecimal price = roundedPrice;
                 BigDecimal extendedCost = cost.multiply(BigDecimal.valueOf(qtyOnOrder));
 
                 // LINE NO,DEPARTMENT,CATEGORY,TYPE,CODE,ITEM TYPE,ORDER NO,DESCRIPTION,UOM,
                 // QTY ON ORD,RESTOCK LEVEL,REORDER POINT,QTY ON HAND,COST,DISCOUNT,BID,
                 // EXTENDED COST,TAX CODE,PRICE
-                writer.printf("%d,5,5.2,,%s,,%s,%s,,%d,,,,%.2f,,,%.2f,TAX,%.2f%n",
+                writer.printf("%d,5,5.2,,%s,,%s,%s,,%d,,,%.2f,,,%.2f,TAX,%.2f%n",
                         lineNo++,               // LINE NO
                         code,                   // CODE (required)
                         "",                     // ORDER NO (can be populated with trader name if needed)
@@ -166,6 +271,118 @@ public class TradeReceivingExportService {
      * @param conditions List of conditions for each card
      * @return The filename of the saved list
      */
+    /**
+     * Saves a human-readable card list for record keeping using table values
+     *
+     * @param items List of received cards
+     * @param traderName Name of trader/source
+     * @param customerName Name of customer
+     * @param driversLicense Driver's license number
+     * @param checkNumber Check number (if applicable)
+     * @param isStoreCredit Whether payment is store credit (true) or check (false)
+     * @param conditions List of conditions for each card
+     * @param unitPrices Actual unit prices from table (already condition-adjusted)
+     * @param quantities Actual quantities from table
+     * @return The filename of the saved list
+     */
+    public String saveCardList(List<TradeItem> items, String traderName, String customerName,
+                               String driversLicense, String checkNumber, boolean isStoreCredit,
+                               List<String> conditions, List<BigDecimal> unitPrices, List<Integer> quantities) throws IOException {
+        ensureDataDirectoryExists();
+
+        // New format: YYYY-MM-DD_HH-MM-SS_CUSTOMER_NAME
+        LocalDateTime now = LocalDateTime.now();
+        String timestamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+        String safeName = sanitizeFilename(customerName.isEmpty() ? "UNKNOWN" : customerName).toUpperCase();
+        String filename = String.format("%s/%s_%s.txt",
+                DATA_DIRECTORY, timestamp, safeName);
+
+        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+            writer.println("╔════════════════════════════════════════════════════════════╗");
+            writer.println("║          RECEIVED CARDS LIST - OCC CARD PRICER             ║");
+            writer.println("╚════════════════════════════════════════════════════════════╝");
+            writer.println();
+
+            writer.println("Customer Name: " + customerName);
+            writer.println("Trader Name: " + (traderName != null && !traderName.isEmpty() ? traderName : "N/A"));
+            writer.println("Driver's License: " + (driversLicense != null && !driversLicense.isEmpty() ? driversLicense : "N/A"));
+            writer.println("Payment Method: " + (isStoreCredit ? "Store Credit (50%)" : "Check (33%)"));
+            if (!isStoreCredit && checkNumber != null && !checkNumber.isEmpty()) {
+                writer.println("Check Number: " + checkNumber);
+            }
+            writer.println("Date: " + LocalDateTime.now().format(
+                    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
+
+            int totalCards = quantities.stream().mapToInt(Integer::intValue).sum();
+            writer.println("Total Cards: " + totalCards);
+
+            // Calculate total value from table values
+            BigDecimal totalValue = BigDecimal.ZERO;
+            for (int i = 0; i < items.size(); i++) {
+                BigDecimal rowTotal = unitPrices.get(i).multiply(BigDecimal.valueOf(quantities.get(i)));
+                totalValue = totalValue.add(rowTotal);
+            }
+
+            writer.printf("Total Value: $%.2f%n", totalValue);
+            writer.printf("Half Rate (50%%): $%.2f%n",
+                    totalValue.multiply(new BigDecimal("0.50")));
+            writer.printf("Third Rate (33%%): $%.2f%n",
+                    totalValue.multiply(new BigDecimal("0.33")));
+
+            writer.println("\n" + "=".repeat(70));
+            writer.println("CARD LIST");
+            writer.println("=".repeat(70));
+            writer.printf("%-15s %-30s %-8s %-5s %-10s %-10s%n",
+                    "Code", "Card Name", "Condition", "Qty", "Unit", "Total");
+            writer.println("-".repeat(70));
+
+            for (int i = 0; i < items.size(); i++) {
+                TradeItem item = items.get(i);
+                Card card = item.getCard();
+
+                StringBuilder codeBuilder = new StringBuilder();
+                codeBuilder.append(card.getSetCode())
+                        .append(" ")
+                        .append(card.getCollectorNumber());
+                if (item.isFoil()) {
+                    codeBuilder.append("F");
+                }
+
+                StringBuilder nameBuilder = new StringBuilder();
+                nameBuilder.append(card.getName());
+                if (card.getFrameEffectDisplay() != null) {
+                    nameBuilder.append(" - ").append(card.getFrameEffects());
+                }
+                if (item.isFoil()) {
+                    nameBuilder.append(" (Foil)");
+                }
+
+                String condition = (conditions != null && i < conditions.size()) ? conditions.get(i) : "NM";
+                int qty = quantities.get(i);
+                BigDecimal unitPrice = unitPrices.get(i);
+                BigDecimal rowTotal = unitPrice.multiply(BigDecimal.valueOf(qty));
+
+                writer.printf("%-15s %-30s %-8s %-5d $%-9.2f $%-9.2f%n",
+                        codeBuilder.toString(),
+                        truncate(nameBuilder.toString(), 30),
+                        condition,
+                        qty,
+                        unitPrice,
+                        rowTotal);
+            }
+
+            writer.println("-".repeat(70));
+        }
+
+        System.out.println("Card list saved: " + filename);
+        return filename;
+    }
+
+    /**
+     * Legacy method - delegates to new method with recalculated values
+     * @deprecated Use saveCardList with unitPrices and quantities parameters
+     */
+    @Deprecated
     public String saveCardList(List<TradeItem> items, String traderName, String customerName,
                                String driversLicense, String checkNumber, boolean isStoreCredit,
                                List<String> conditions) throws IOException {
@@ -300,18 +517,21 @@ public class TradeReceivingExportService {
         if (value == null) {
             return "";
         }
-        return value.replace("\"", "\"\"");
+        // Replace commas with ɕ to avoid CSV parsing issues
+        // Replace quotes with double quotes for proper CSV escaping
+        return value.replace(",", "ɕ").replace("\"", "\"\"");
     }
 
     /**
-     * Quotes a string if it contains commas
+     * Quotes a string if it contains special characters (no longer needed for commas since we replace them)
      */
     private String quoteIfNeeded(String value) {
         if (value == null) {
             return "";
         }
         String escaped = escapeCSV(value);
-        if (escaped.contains(",")) {
+        // Only quote if contains quotes (commas are already replaced)
+        if (escaped.contains("\"")) {
             return "\"" + escaped + "\"";
         }
         return escaped;
@@ -394,20 +614,16 @@ public class TradeReceivingExportService {
      * Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
      */
     private String formatChangeQtyRow(String code, String cardName, String artist, int newQty) {
-        // Escape and quote card name if needed
-        String escapedName = cardName.replace("\"", "\"\"");
-        String description = escapedName.contains(",") ? "\"" + escapedName + "\"" : escapedName;
-
-        // Escape and quote artist if needed
-        String escapedArtist = artist.replace("\"", "\"\"");
-        String extendedDesc = escapedArtist.contains(",") ? "\"" + escapedArtist + "\"" : escapedArtist;
+        // Replace commas with ɕ to avoid CSV parsing issues
+        String escapedName = cardName.replace(",", "ɕ").replace("\"", "\"\"");
+        String escapedArtist = artist.replace(",", "ɕ").replace("\"", "\"\"");
 
         // Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
         // We leave ON_HAND-QTY empty (they'll fill it in from current inventory)
         return String.format("%s,%s,%s,,%d",
                 code,
-                description,
-                extendedDesc,
+                escapedName,
+                escapedArtist,
                 newQty);
     }
 }

@@ -3,6 +3,7 @@ package com.cardpricer.gui;
 import com.cardpricer.gui.panel.BulkPricerPanel;
 import com.cardpricer.gui.panel.FileManagerPanel;
 import com.cardpricer.gui.panel.InventoryPanel;
+import com.cardpricer.gui.panel.PreferencesPanel;
 import com.cardpricer.gui.panel.TradePanel;
 import com.formdev.flatlaf.FlatDarkLaf;
 
@@ -23,6 +24,7 @@ public class MainSwingApplication {
     private JPanel tradePanel;
     private JPanel fileManagerPanel;
     private JPanel inventoryPanel;
+    private JPanel preferencesPanel;
 
     // Screen keys
     private static final String SCREEN_HOME = "home";
@@ -30,10 +32,11 @@ public class MainSwingApplication {
     private static final String SCREEN_FILES = "files";
     private static final String SCREEN_TRADES = "trades";
     private static final String SCREEN_INVENTORY = "inventory";
+    private static final String SCREEN_PREFERENCES = "preferences";
 
     public static void main(String[] args) {
-        // 1) Set modern look & feel
-        FlatDarkLaf.setup();
+        // 1) Apply saved theme (or default to FlatLaf Dark)
+        PreferencesPanel.applySavedTheme();
 
         // 2) Always start Swing on the EDT
         SwingUtilities.invokeLater(() -> new MainSwingApplication().start());
@@ -64,6 +67,7 @@ public class MainSwingApplication {
         contentArea.add(new JPanel(), SCREEN_FILES);
         contentArea.add(new JPanel(), SCREEN_TRADES);
         contentArea.add(new JPanel(), SCREEN_INVENTORY);
+        contentArea.add(new JPanel(), SCREEN_PREFERENCES);
 
         root.add(contentArea, BorderLayout.CENTER);
 
@@ -135,7 +139,7 @@ public class MainSwingApplication {
         sidebar.add(settingsLabel);
         sidebar.add(Box.createVerticalStrut(8));
 
-        JButton btnPrefs = createActionButton("Preferences", () -> JOptionPane.showMessageDialog(frame, "Settings coming soon."));
+        JButton btnPrefs = createActionButton("Preferences", () -> showScreen("preferences", "Preferences"));
         JButton btnAbout = createActionButton("About", this::showAboutDialog);
 
         sidebar.add(btnPrefs);
@@ -182,7 +186,7 @@ public class MainSwingApplication {
         statusLabel = new JLabel("Ready");
         statusLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
 
-        JLabel version = new JLabel("v1.0.4");
+        JLabel version = new JLabel("v1.0.0");
         version.setForeground(UIManager.getColor("Label.disabledForeground"));
 
         status.add(statusLabel, BorderLayout.WEST);
@@ -251,6 +255,10 @@ public class MainSwingApplication {
 
     private JPanel createFileManagerScreen() {
         return new FileManagerPanel();
+    }
+
+    private JPanel createPreferencesScreen() {
+        return new  PreferencesPanel();
     }
 
     private JPanel createComingSoonScreen(String featureName) {
@@ -355,6 +363,21 @@ public class MainSwingApplication {
                         if (i == 4) { // SCREEN_INVENTORY is fifth component
                             contentArea.remove(components[i]);
                             contentArea.add(inventoryPanel, SCREEN_INVENTORY, i);
+                            needsRevalidate = true;
+                            break;
+                        }
+                    }
+                }
+                break;
+
+            case SCREEN_PREFERENCES:
+                if (preferencesPanel == null) {
+                    preferencesPanel = createPreferencesScreen();
+                    Component[] components = contentArea.getComponents();
+                    for (int i = 0; i < components.length; i++) {
+                        if (i == 5) { // SCREEN_PREFERENCES is sixth component
+                            contentArea.remove(components[i]);
+                            contentArea.add(preferencesPanel, SCREEN_PREFERENCES, i);
                             needsRevalidate = true;
                             break;
                         }

@@ -314,7 +314,18 @@ public class TradePanel extends JPanel {
 
         // Set up condition dropdown
         JComboBox<String> conditionCombo = new JComboBox<>(CONDITIONS);
-        cardTable.getColumnModel().getColumn(3).setCellEditor(new DefaultCellEditor(conditionCombo));
+        DefaultCellEditor conditionEditor = new DefaultCellEditor(conditionCombo) {
+            @Override
+            public boolean stopCellEditing() {
+                boolean result = super.stopCellEditing();
+                if (result) {
+                    // Auto-focus search bar after condition change
+                    SwingUtilities.invokeLater(() -> cardCodeField.requestFocusInWindow());
+                }
+                return result;
+            }
+        };
+        cardTable.getColumnModel().getColumn(3).setCellEditor(conditionEditor);
 
         // Add listener to condition dropdown to update price when changed
         conditionCombo.addActionListener(e -> {
@@ -371,7 +382,12 @@ public class TradePanel extends JPanel {
                             JOptionPane.ERROR_MESSAGE);
                     return false;
                 }
-                return super.stopCellEditing();
+                boolean result = super.stopCellEditing();
+                if (result) {
+                    // Auto-focus search bar after successful edit
+                    SwingUtilities.invokeLater(() -> cardCodeField.requestFocusInWindow());
+                }
+                return result;
             }
         };
         cardTable.getColumnModel().getColumn(4).setCellEditor(qtyEditor);
@@ -383,10 +399,8 @@ public class TradePanel extends JPanel {
                 if (row >= 0) {
                     SwingUtilities.invokeLater(() -> {
                         int qty = (Integer) tableModel.getValueAt(row, 4);
-
                         // keep TradeItem model in sync for exports
                         receivedCards.get(row).setQuantity(qty);
-
                         updateRowTotal(row);
                         updateSummary();
                     });
@@ -1324,12 +1338,31 @@ public class TradePanel extends JPanel {
             traderName = "Unknown";
         }
 
-        // Filter out MISC cards for POS export
+        // Filter out MISC cards and extract corresponding table values
         List<TradeItem> nonMiscCards = new ArrayList<>();
+        List<BigDecimal> nonMiscUnitPrices = new ArrayList<>();
+        List<Integer> nonMiscQuantities = new ArrayList<>();
         int miscCount = 0;
-        for (TradeItem item : receivedCards) {
-            if (!"MISC".equals(item.getCard().getSetCode())) {
+
+        // Iterate through table rows (not receivedCards, in case table is sorted)
+        for (int i = 0; i < tableModel.getRowCount(); i++) {
+            // Get card code to identify if it's MISC
+            String code = (String) tableModel.getValueAt(i, 1); // Column 1 is Code
+
+            if (!code.startsWith("MISC")) {
+                // This is a real card, not MISC
+                TradeItem item = receivedCards.get(i);
                 nonMiscCards.add(item);
+
+                // Extract unit price from table (Column 5)
+                String unitPriceStr = (String) tableModel.getValueAt(i, 5);
+                BigDecimal unitPrice = new BigDecimal(unitPriceStr.replace("$", "").replace(",", "").trim());
+                nonMiscUnitPrices.add(unitPrice);
+
+                // Extract quantity from table (Column 4)
+                Object qtyObj = tableModel.getValueAt(i, 4);
+                int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
+                nonMiscQuantities.add(qty);
             } else {
                 miscCount++;
             }
@@ -1345,16 +1378,31 @@ public class TradePanel extends JPanel {
         }
 
         try {
-            String filename = exportService.exportToPOSFormat(nonMiscCards, traderName);
+            // Determine payment type
+            String paymentType;
+            if (inventoryRadio.isSelected()) {
+                paymentType = "inventory";
+            } else if (checkRadio.isSelected()) {
+                paymentType = "check";
+            } else {
+                paymentType = "credit"; // Store credit
+            }
+
+            // Use new method with table values and payment type
+            String filename = exportService.exportToPOSFormat(
+                    nonMiscCards, traderName, nonMiscUnitPrices, nonMiscQuantities, paymentType);
 
             String message = String.format("POS import file created!\n\n" +
                             "File: %s\n" +
                             "Cards Exported: %d\n" +
-                            "Total Value: $%.2f\n\n" +
+                            "Total Value: $%.2f\n" +
+                            "Payment Type: %s\n\n" +
                             "Ready to import into your POS system.",
                     filename,
                     nonMiscCards.size(),
-                    calculateTotalValue(nonMiscCards));
+                    calculateTotalValue(nonMiscCards),
+                    paymentType.equals("credit") ? "Store Credit (50%)" :
+                            paymentType.equals("check") ? "Check (33%)" : "Inventory (0%)");
 
             if (miscCount > 0) {
                 message += String.format("\n\nNote: %d MISC card(s) were excluded from export.", miscCount);
@@ -1399,7 +1447,24 @@ public class TradePanel extends JPanel {
             customerName = "Unknown";
         }
 
+        // Extract table values
+        List<BigDecimal> unitPrices = new ArrayList<>();
+        List<Integer> quantities = new ArrayList<>();
+
+        for (int i = 0; i < tableModel.getRowCount(); i++) {
+            // Extract unit price from table (Column 5)
+            String unitPriceStr = (String) tableModel.getValueAt(i, 5);
+            BigDecimal unitPrice = new BigDecimal(unitPriceStr.replace("$", "").replace(",", "").trim());
+            unitPrices.add(unitPrice);
+
+            // Extract quantity from table (Column 4) - handle both Integer and String
+            Object qtyObj = tableModel.getValueAt(i, 4);
+            int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
+            quantities.add(qty);
+        }
+
         try {
+            // Use new method with table values
             String filename = exportService.saveCardList(
                     receivedCards,
                     traderName,
@@ -1407,7 +1472,9 @@ public class TradePanel extends JPanel {
                     driversLicense,
                     checkNumber,
                     isStoreCredit,
-                    cardConditions
+                    cardConditions,
+                    unitPrices,
+                    quantities
             );
 
             JOptionPane.showMessageDialog(this,
@@ -1431,25 +1498,20 @@ public class TradePanel extends JPanel {
      */
     private BigDecimal calculateTotalValue(List<TradeItem> items) {
         BigDecimal total = BigDecimal.ZERO;
-
         for (int i = 0; i < tableModel.getRowCount(); i++) {
             TradeItem receivedItem = receivedCards.get(i);
             if (!items.contains(receivedItem)) continue;
-
             // Column 6 is Total (String like "$12.00")
             Object totalObj = tableModel.getValueAt(i, 6);
             if (totalObj == null) continue;
-
             String totalStr = totalObj.toString().replace("$", "").replace(",", "").trim();
             try {
                 total = total.add(new BigDecimal(totalStr));
             } catch (Exception ignored) {
             }
         }
-
         return total;
     }
-
 
     private BigDecimal applyPricingRules(BigDecimal price, String rarity) {
         BigDecimal minimum = getMinimumByRarity(rarity);
