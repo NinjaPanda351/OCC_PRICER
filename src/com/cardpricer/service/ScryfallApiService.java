@@ -171,6 +171,13 @@ public class ScryfallApiService {
             } else {
                 card.setFoilPrice(null); // Will be set to "N/A" by setter
             }
+
+            // Etched price
+            if (!prices.isNull("usd_etched")) {
+                card.setEtchedPrice(prices.getString("usd_etched"));
+            } else {
+                card.setEtchedPrice(null); // Will be set to "N/A" by setter
+            }
         }
 
         return card;

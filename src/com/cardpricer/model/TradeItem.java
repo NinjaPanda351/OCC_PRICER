@@ -44,6 +44,35 @@ public class TradeItem {
                 theCard.getPriceAsBigDecimal();
     }
 
+    /**
+     * Creates a TradeItem with specified quantity and finish type
+     * @param theCard The card being traded
+     * @param isFoil Whether this is the foil/etched version
+     * @param theQuantity How many of this card
+     * @param finishType "F" for foil, "E" for etched, "" for normal
+     */
+    public TradeItem(final Card theCard, final boolean isFoil, final int theQuantity, final String finishType) {
+        if (theCard == null) {
+            throw new IllegalArgumentException("Card cannot be null");
+        }
+        if (theQuantity < 1) {
+            throw new IllegalArgumentException("Quantity must be at least 1");
+        }
+
+        this.myCard = theCard;
+        this.myIsFoil = isFoil;
+        this.myQuantity = theQuantity;
+
+        // Set unit price based on finish type
+        if ("F".equals(finishType)) {
+            this.myUnitPrice = theCard.getFoilPriceAsBigDecimal();
+        } else if ("E".equals(finishType)) {
+            this.myUnitPrice = theCard.getEtchedPriceAsBigDecimal();
+        } else {
+            this.myUnitPrice = theCard.getPriceAsBigDecimal();
+        }
+    }
+
     // Getters
     public Card getCard() {
         return myCard;
@@ -111,6 +140,10 @@ public class TradeItem {
      */
     public boolean hasValidPrice() {
         return myUnitPrice != null && myUnitPrice.compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    public void setUnitPrice(final BigDecimal theUnitPrice) {
+        this.myUnitPrice = theUnitPrice;
     }
 
     @Override

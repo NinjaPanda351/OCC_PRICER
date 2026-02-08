@@ -15,8 +15,12 @@ import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableCellEditor;
 import javax.swing.table.TableCellRenderer;
 import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -24,7 +28,7 @@ import java.util.List;
 
 /**
  * Quick-entry panel for receiving cards from trades/purchases
- * Format: "TDM 3" (normal), "TDM 3F" (foil), "TDM 3E" (etched)
+ * Format: "TDM 3" (normal), "TDM 3f" (foil), "TDM 3e" (etched)
  */
 public class TradePanel extends JPanel {
 
@@ -55,9 +59,14 @@ public class TradePanel extends JPanel {
     private JRadioButton storeCreditRadio;
     private JRadioButton checkRadio;
     private JRadioButton inventoryRadio;
+    private JRadioButton partialRadio;
+    private JTextField partialCreditField;
+    private JTextField partialCheckField;
+    private JPanel partialPaymentPanel;
 
     // Preview card
     private Card previewCard;
+    private String lastPreviewCode; // Track what code the preview is showing
     private String previewFinish;
 
     // Condition options
@@ -152,50 +161,77 @@ public class TradePanel extends JPanel {
         gbc.gridx = 1;
         gbc.gridwidth = 3;
         gbc.weightx = 1.0;
+
+        // Use BoxLayout to stack radio buttons and partial payment panel
+        JPanel paymentContainer = new JPanel();
+        paymentContainer.setLayout(new BoxLayout(paymentContainer, BoxLayout.Y_AXIS));
+
         JPanel paymentPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 0));
 
         ButtonGroup paymentGroup = new ButtonGroup();
         storeCreditRadio = new JRadioButton("Store Credit (50%)");
         checkRadio = new JRadioButton("Check (33%)");
         inventoryRadio = new JRadioButton("Inventory (No Payout)");
+        partialRadio = new JRadioButton("Partial (Split Payment)");
 
         storeCreditRadio.setSelected(true); // Default to store credit
 
         paymentGroup.add(storeCreditRadio);
         paymentGroup.add(checkRadio);
         paymentGroup.add(inventoryRadio);
+        paymentGroup.add(partialRadio);
 
         // Add listeners to enable/disable check number field and highlight rate
         storeCreditRadio.addActionListener(e -> {
             checkNumberField.setEnabled(false);
             checkNumberField.setText("");
+            partialPaymentPanel.setVisible(false);
             highlightPaymentRate();
         });
 
         checkRadio.addActionListener(e -> {
             checkNumberField.setEnabled(true);
             checkNumberField.requestFocusInWindow();
+            partialPaymentPanel.setVisible(false);
             highlightPaymentRate();
         });
 
         inventoryRadio.addActionListener(e -> {
             checkNumberField.setEnabled(false);
             checkNumberField.setText("");
+            partialPaymentPanel.setVisible(false);
             highlightPaymentRate();
+        });
+
+        partialRadio.addActionListener(e -> {
+            checkNumberField.setEnabled(false);
+            checkNumberField.setText("");
+            partialPaymentPanel.setVisible(true);
+            highlightPaymentRate();
+            // Auto-calculate 50/50 split by default
+            updatePartialSplit();
         });
 
         paymentPanel.add(storeCreditRadio);
         paymentPanel.add(checkRadio);
         paymentPanel.add(inventoryRadio);
+        paymentPanel.add(partialRadio);
 
-        tradeInfoPanel.add(paymentPanel, gbc);
+        paymentContainer.add(paymentPanel);
+
+        // Create partial payment panel (initially hidden)
+        partialPaymentPanel = createPartialPaymentPanel();
+        partialPaymentPanel.setVisible(false);
+        paymentContainer.add(partialPaymentPanel);
+
+        tradeInfoPanel.add(paymentContainer, gbc);
 
         panel.add(tradeInfoPanel, BorderLayout.NORTH);
 
         // Middle: Input field
         JPanel inputPanel = new JPanel(new BorderLayout(10, 5));
 
-        JLabel instructionLabel = new JLabel("<html>Enter card code and press ENTER (e.g., TDM 3, TDM 3F, TDM 3E) | Type <b>misc</b> for manual entry | Press <b>Ctrl+F</b> to search by name</html>");
+        JLabel instructionLabel = new JLabel("<html>Enter card code and press ENTER (e.g., TDM 3, TDM 3f, TDM 3e) | Type <b>misc</b> for manual entry | Press <b>Ctrl+F</b> to search by name</html>");
         instructionLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
         inputPanel.add(instructionLabel, BorderLayout.NORTH);
 
@@ -215,14 +251,24 @@ public class TradePanel extends JPanel {
                         cardCodeField.setText(formatted);
                     }
 
-                    // Now fetch if we don't have a preview yet, then add
-                    if (previewCard == null) {
-                        fetchPreviewAndAdd();
+                    // Check if we have a preview and if it matches the current input
+                    if (previewCard != null && parsed != null) {
+                        String currentCode = parsed.setCode + " " + parsed.collectorNumber;
+                        // If preview doesn't match current input, clear it and fetch fresh
+                        if (lastPreviewCode == null || !lastPreviewCode.equals(currentCode)) {
+                            clearPreview();
+                            fetchPreviewAndAdd();
+                        } else {
+                            // Preview matches, add it
+                            addCard();
+                        }
                     } else {
-                        addCard();
+                        // No preview yet, fetch and add
+                        fetchPreviewAndAdd();
                     }
-                } else if (e.getKeyCode() == KeyEvent.VK_F && e.isControlDown()) {
-                    // Ctrl+F to open search dialog
+                } else if ((e.getKeyCode() == KeyEvent.VK_F && e.isControlDown()) ||
+                        e.getKeyCode() == KeyEvent.VK_F2) {
+                    // Ctrl+F or F2 to open search dialog
                     openSearchDialog();
                 } else {
                     schedulePreview();
@@ -251,7 +297,7 @@ public class TradePanel extends JPanel {
         tableModel = new DefaultTableModel(columns, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
-                return column == 0 || column == 3 || column == 4; // Checkbox, Condition, and Qty are editable
+                return column == 0 || column == 3 || column == 4 || column == 5; // Checkbox, Condition, Qty, Unit Price editable
             }
 
             @Override
@@ -262,6 +308,8 @@ public class TradePanel extends JPanel {
                     return String.class; // Condition column
                 } else if (column == 4) {
                     return Integer.class; // Qty column
+                } else if (column == 5) {
+                    return String.class; // Unit Price column
                 }
                 return super.getColumnClass(column);
             }
@@ -277,6 +325,32 @@ public class TradePanel extends JPanel {
         cardTable.getColumnModel().getColumn(4).setPreferredWidth(60);  // Qty
         cardTable.getColumnModel().getColumn(5).setPreferredWidth(100); // Unit Price
         cardTable.getColumnModel().getColumn(6).setPreferredWidth(100); // Total
+
+        // Click anywhere on row to select it and check its checkbox
+        cardTable.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                int row = cardTable.rowAtPoint(e.getPoint());
+                int column = cardTable.columnAtPoint(e.getPoint());
+
+                if (row >= 0) {
+                    // Select the row
+                    cardTable.setRowSelectionInterval(row, row);
+
+                    // If NOT clicking the checkbox column itself, toggle checkboxes
+                    if (column != 0) {
+                        // Deselect all other checkboxes
+                        for (int i = 0; i < tableModel.getRowCount(); i++) {
+                            if (i != row) {
+                                tableModel.setValueAt(false, i, 0);
+                            }
+                        }
+                        // Check this row's checkbox
+                        tableModel.setValueAt(true, row, 0);
+                    }
+                }
+            }
+        });
 
         // Enable table sorting but disable auto-sort (maintain chronological order by default)
         javax.swing.table.TableRowSorter<DefaultTableModel> sorter =
@@ -369,14 +443,14 @@ public class TradePanel extends JPanel {
                 try {
                     int qty = Integer.parseInt(value.trim());
                     if (qty <= 0) {
-                        JOptionPane.showMessageDialog(cardTable,
+                        JOptionPane.showMessageDialog(getParentWindow(),
                                 "Quantity must be a positive integer",
                                 "Invalid Quantity",
                                 JOptionPane.WARNING_MESSAGE);
                         return false;
                     }
                 } catch (NumberFormatException e) {
-                    JOptionPane.showMessageDialog(cardTable,
+                    JOptionPane.showMessageDialog(getParentWindow(),
                             "Please enter a valid positive number",
                             "Invalid Quantity",
                             JOptionPane.ERROR_MESSAGE);
@@ -392,15 +466,113 @@ public class TradePanel extends JPanel {
         };
         cardTable.getColumnModel().getColumn(4).setCellEditor(qtyEditor);
 
-        // Add table model listener to recalculate on qty change
+        // Set up Unit Price editor with validation
+        JTextField priceField = new JTextField();
+        priceField.setHorizontalAlignment(JTextField.RIGHT);
+        DefaultCellEditor priceEditor = new DefaultCellEditor(priceField) {
+            @Override
+            public Component getTableCellEditorComponent(JTable table, Object value,
+                                                         boolean isSelected, int row, int column) {
+                JTextField editor = (JTextField) super.getTableCellEditorComponent(
+                        table, value, isSelected, row, column);
+                // Remove $ sign for editing
+                String text = value.toString().replace("$", "").replace(",", "").trim();
+                editor.setText(text);
+                editor.selectAll();
+                return editor;
+            }
+
+            @Override
+            public Object getCellEditorValue() {
+                String value = (String) super.getCellEditorValue();
+                value = value.replace("$", "").replace(",", "").trim();
+
+                if (value.isEmpty()) {
+                    return "$0.00";
+                }
+
+                try {
+                    // Check if user entered a decimal point
+                    if (value.contains(".")) {
+                        // User used decimal: "5.00" → $5.00
+                        BigDecimal price = new BigDecimal(value);
+                        return String.format("$%.2f", price);
+                    } else {
+                        // No decimal: interpret as cents: "500" → $5.00
+                        int cents = Integer.parseInt(value);
+                        BigDecimal price = new BigDecimal(cents).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+                        return String.format("$%.2f", price);
+                    }
+                } catch (NumberFormatException e) {
+                    return "$0.00";
+                }
+            }
+
+            @Override
+            public boolean stopCellEditing() {
+                String value = (String) super.getCellEditorValue();
+                value = value.replace("$", "").replace(",", "").trim();
+
+                if (value.isEmpty()) {
+                    JOptionPane.showMessageDialog(getParentWindow(),
+                            "Please enter a price",
+                            "Invalid Price",
+                            JOptionPane.WARNING_MESSAGE);
+                    return false;
+                }
+
+                try {
+                    BigDecimal price;
+                    // Parse based on whether decimal point is present
+                    if (value.contains(".")) {
+                        price = new BigDecimal(value);
+                    } else {
+                        int cents = Integer.parseInt(value);
+                        price = new BigDecimal(cents).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+                    }
+
+                    if (price.compareTo(BigDecimal.ZERO) < 0) {
+                        JOptionPane.showMessageDialog(getParentWindow(),
+                                "Price cannot be negative",
+                                "Invalid Price",
+                                JOptionPane.WARNING_MESSAGE);
+                        return false;
+                    }
+                } catch (NumberFormatException e) {
+                    JOptionPane.showMessageDialog(getParentWindow(),
+                            "Please enter a valid price",
+                            "Invalid Price",
+                            JOptionPane.ERROR_MESSAGE);
+                    return false;
+                }
+                boolean result = super.stopCellEditing();
+                if (result) {
+                    // Auto-focus search bar after successful edit
+                    SwingUtilities.invokeLater(() -> cardCodeField.requestFocusInWindow());
+                }
+                return result;
+            }
+        };
+        cardTable.getColumnModel().getColumn(5).setCellEditor(priceEditor);
+
+        // Add table model listener to recalculate on qty or price change
         tableModel.addTableModelListener(e -> {
-            if (e.getColumn() == 4) { // Qty column changed
+            int column = e.getColumn();
+            if (column == 4) { // Qty column changed
                 int row = e.getFirstRow();
                 if (row >= 0) {
                     SwingUtilities.invokeLater(() -> {
                         int qty = (Integer) tableModel.getValueAt(row, 4);
                         // keep TradeItem model in sync for exports
                         receivedCards.get(row).setQuantity(qty);
+                        updateRowTotal(row);
+                        updateSummary();
+                    });
+                }
+            } else if (column == 5) { // Unit Price column changed
+                int row = e.getFirstRow();
+                if (row >= 0) {
+                    SwingUtilities.invokeLater(() -> {
                         updateRowTotal(row);
                         updateSummary();
                     });
@@ -481,6 +653,29 @@ public class TradePanel extends JPanel {
 
         JScrollPane scrollPane = new JScrollPane(cardTable);
         scrollPane.setBorder(BorderFactory.createTitledBorder("Received Cards (Click column headers to sort)"));
+
+        // Add keyboard shortcuts for table
+        InputMap inputMap = cardTable.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT);
+        ActionMap actionMap = cardTable.getActionMap();
+
+        // + key to duplicate selected card
+        inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_PLUS, 0), "duplicateCard");
+        inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_EQUALS, InputEvent.SHIFT_DOWN_MASK), "duplicateCard");
+        actionMap.put("duplicateCard", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                duplicateSelectedCard();
+            }
+        });
+
+        // F2 key to open search
+        inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_F2, 0), "openSearch");
+        actionMap.put("openSearch", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                openSearchDialog();
+            }
+        });
 
         panel.add(scrollPane, BorderLayout.CENTER);
 
@@ -575,6 +770,170 @@ public class TradePanel extends JPanel {
         return panel;
     }
 
+    private JPanel createPartialPaymentPanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        panel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder("Split Payment"),
+                new EmptyBorder(5, 10, 5, 10)
+        ));
+
+        panel.add(new JLabel("Store Credit $"));
+
+        partialCreditField = new JTextField(8);
+        partialCreditField.setHorizontalAlignment(JTextField.RIGHT);
+        partialCreditField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyReleased(KeyEvent e) {
+                if (e.getKeyCode() != KeyEvent.VK_TAB) {
+                    updatePartialCheck();
+                }
+            }
+        });
+        panel.add(partialCreditField);
+
+        panel.add(new JLabel("  +  Check $"));
+
+        partialCheckField = new JTextField(8);
+        partialCheckField.setHorizontalAlignment(JTextField.RIGHT);
+        partialCheckField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyReleased(KeyEvent e) {
+                if (e.getKeyCode() != KeyEvent.VK_TAB) {
+                    updatePartialCredit();
+                }
+            }
+        });
+        panel.add(partialCheckField);
+
+        JLabel equalsLabel = new JLabel("  =  $0.00");
+        equalsLabel.setFont(equalsLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(equalsLabel);
+
+        return panel;
+    }
+
+    private void updatePartialSplit() {
+        // Auto-calculate 50/50 split of current total
+        try {
+            String totalText = totalPriceLabel.getText();
+            // Extract number from "TOTAL PRICE: $123.45 (5 cards)"
+            String[] parts = totalText.split("\\$");
+            if (parts.length > 1) {
+                String numberPart = parts[1].split(" ")[0].replace(",", "");
+                BigDecimal total = new BigDecimal(numberPart);
+                BigDecimal half = total.divide(new BigDecimal("2"), 2, RoundingMode.HALF_UP);
+
+                partialCreditField.setText(String.format("%.2f", half));
+                partialCheckField.setText(String.format("%.2f", half));
+                updatePartialTotal();
+            }
+        } catch (Exception e) {
+            partialCreditField.setText("0.00");
+            partialCheckField.setText("0.00");
+        }
+    }
+
+    private void updatePartialCheck() {
+        // User typed in credit field, auto-calculate check amount
+        try {
+            String totalText = totalPriceLabel.getText();
+            String[] parts = totalText.split("\\$");
+            if (parts.length > 1) {
+                String numberPart = parts[1].split(" ")[0].replace(",", "");
+                BigDecimal total = new BigDecimal(numberPart);
+
+                String creditText = partialCreditField.getText().trim();
+                if (creditText.isEmpty()) {
+                    partialCheckField.setText("");
+                    updatePartialTotal();
+                    return;
+                }
+
+                BigDecimal credit = new BigDecimal(creditText.replace(",", ""));
+                BigDecimal check = total.subtract(credit);
+
+                if (check.compareTo(BigDecimal.ZERO) < 0) {
+                    check = BigDecimal.ZERO;
+                }
+
+                partialCheckField.setText(String.format("%.2f", check));
+                updatePartialTotal();
+            }
+        } catch (Exception e) {
+            // Invalid number, don't update
+        }
+    }
+
+    private void updatePartialCredit() {
+        // User typed in check field, auto-calculate credit amount
+        try {
+            String totalText = totalPriceLabel.getText();
+            String[] parts = totalText.split("\\$");
+            if (parts.length > 1) {
+                String numberPart = parts[1].split(" ")[0].replace(",", "");
+                BigDecimal total = new BigDecimal(numberPart);
+
+                String checkText = partialCheckField.getText().trim();
+                if (checkText.isEmpty()) {
+                    partialCreditField.setText("");
+                    updatePartialTotal();
+                    return;
+                }
+
+                BigDecimal check = new BigDecimal(checkText.replace(",", ""));
+                BigDecimal credit = total.subtract(check);
+
+                if (credit.compareTo(BigDecimal.ZERO) < 0) {
+                    credit = BigDecimal.ZERO;
+                }
+
+                partialCreditField.setText(String.format("%.2f", credit));
+                updatePartialTotal();
+            }
+        } catch (Exception e) {
+            // Invalid number, don't update
+        }
+    }
+
+    private void updatePartialTotal() {
+        try {
+            String creditText = partialCreditField.getText().trim();
+            String checkText = partialCheckField.getText().trim();
+
+            BigDecimal credit = creditText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(creditText.replace(",", ""));
+            BigDecimal check = checkText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(checkText.replace(",", ""));
+            BigDecimal sum = credit.add(check);
+
+            // Find the equals label in the panel
+            Component[] components = partialPaymentPanel.getComponents();
+            for (Component comp : components) {
+                if (comp instanceof JLabel) {
+                    JLabel label = (JLabel) comp;
+                    if (label.getText().startsWith("  =  ")) {
+                        label.setText(String.format("  =  $%.2f", sum));
+
+                        // Validate against total
+                        String totalText = totalPriceLabel.getText();
+                        String[] parts = totalText.split("\\$");
+                        if (parts.length > 1) {
+                            String numberPart = parts[1].split(" ")[0].replace(",", "");
+                            BigDecimal total = new BigDecimal(numberPart);
+
+                            if (sum.compareTo(total) == 0) {
+                                label.setForeground(new Color(0, 150, 0)); // Green if matches
+                            } else {
+                                label.setForeground(Color.RED); // Red if doesn't match
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Ignore parse errors
+        }
+    }
+
     private void highlightPaymentRate() {
         // Reset both to normal
         halfRateLabel.setFont(halfRateLabel.getFont().deriveFont(Font.PLAIN, 14f));
@@ -618,6 +977,13 @@ public class TradePanel extends JPanel {
             return;
         }
 
+        // Clear preview if the code changed significantly
+        if (lastPreviewCode != null && !lastPreviewCode.equals(parsed.setCode + " " + parsed.collectorNumber)) {
+            clearPreview();
+        }
+
+        String fetchingCode = parsed.setCode + " " + parsed.collectorNumber;
+
         new SwingWorker<Card, Void>() {
             @Override
             protected Card doInBackground() throws Exception {
@@ -628,7 +994,16 @@ public class TradePanel extends JPanel {
             protected void done() {
                 try {
                     Card card = get();
-                    displayPreview(card, parsed.finish);
+                    // Only display if the input hasn't changed
+                    String currentInput = cardCodeField.getText();
+                    ParsedCode currentParsed = parseCardCode(currentInput);
+                    if (currentParsed != null) {
+                        String currentCode = currentParsed.setCode + " " + currentParsed.collectorNumber;
+                        if (currentCode.equals(fetchingCode)) {
+                            lastPreviewCode = fetchingCode;
+                            displayPreview(card, parsed.finish);
+                        }
+                    }
                 } catch (Exception e) {
                     clearPreview();
                 }
@@ -650,7 +1025,7 @@ public class TradePanel extends JPanel {
 
         ParsedCode parsed = parseCardCode(input);
         if (parsed == null) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "Invalid card code format.\nUse: SET NUMBER or SET NUMBERF\nOr type 'misc' for manual entry",
                     "Invalid Format",
                     JOptionPane.WARNING_MESSAGE);
@@ -702,7 +1077,7 @@ public class TradePanel extends JPanel {
     }
 
     private void promptForManualPrice(ParsedCode parsed) {
-        String priceInput = JOptionPane.showInputDialog(this,
+        String priceInput = JOptionPane.showInputDialog(getParentWindow(),
                 String.format("Card %s %s not found in Scryfall.\nEnter manual price:",
                         parsed.setCode, parsed.collectorNumber),
                 "Manual Price Entry",
@@ -720,7 +1095,7 @@ public class TradePanel extends JPanel {
             BigDecimal price = new BigDecimal(priceInput);
 
             if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                JOptionPane.showMessageDialog(this,
+                JOptionPane.showMessageDialog(getParentWindow(),
                         "Price must be greater than $0.00",
                         "Invalid Price",
                         JOptionPane.WARNING_MESSAGE);
@@ -770,7 +1145,7 @@ public class TradePanel extends JPanel {
             cardCodeField.requestFocusInWindow();
 
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "Invalid price format. Please enter a valid number.",
                     "Invalid Price",
                     JOptionPane.ERROR_MESSAGE);
@@ -787,7 +1162,7 @@ public class TradePanel extends JPanel {
         boolean isFoil = "F".equals(parsed.finish) || "E".equals(parsed.finish);
         String finishType = isFoil ? (("E".equals(parsed.finish)) ? "etched" : "foil") : "normal";
 
-        String priceInput = JOptionPane.showInputDialog(this,
+        String priceInput = JOptionPane.showInputDialog(getParentWindow(),
                 String.format("Card '%s' has no %s price listed.\nEnter manual price:",
                         card.getName(), finishType),
                 "Manual Price Entry",
@@ -805,7 +1180,7 @@ public class TradePanel extends JPanel {
             BigDecimal price = new BigDecimal(priceInput);
 
             if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                JOptionPane.showMessageDialog(this,
+                JOptionPane.showMessageDialog(getParentWindow(),
                         "Price must be greater than $0.00",
                         "Invalid Price",
                         JOptionPane.WARNING_MESSAGE);
@@ -829,7 +1204,7 @@ public class TradePanel extends JPanel {
             addCard();
 
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "Invalid price format. Please enter a valid number.",
                     "Invalid Price",
                     JOptionPane.ERROR_MESSAGE);
@@ -867,7 +1242,7 @@ public class TradePanel extends JPanel {
         gbc.gridx = 1;
         panel.add(priceField, gbc);
 
-        int result = JOptionPane.showConfirmDialog(this, panel,
+        int result = JOptionPane.showConfirmDialog(getParentWindow(), panel,
                 "Add Misc Card", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
 
         if (result != JOptionPane.OK_OPTION) {
@@ -885,7 +1260,7 @@ public class TradePanel extends JPanel {
         }
 
         if (priceInput.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "Price is required",
                     "Missing Price",
                     JOptionPane.WARNING_MESSAGE);
@@ -900,7 +1275,7 @@ public class TradePanel extends JPanel {
             BigDecimal price = new BigDecimal(priceInput);
 
             if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                JOptionPane.showMessageDialog(this,
+                JOptionPane.showMessageDialog(getParentWindow(),
                         "Price must be greater than $0.00",
                         "Invalid Price",
                         JOptionPane.WARNING_MESSAGE);
@@ -945,7 +1320,7 @@ public class TradePanel extends JPanel {
             cardCodeField.requestFocusInWindow();
 
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "Invalid price format. Please enter a valid number.",
                     "Invalid Price",
                     JOptionPane.ERROR_MESSAGE);
@@ -973,7 +1348,7 @@ public class TradePanel extends JPanel {
             price = card.getFoilPriceAsBigDecimal();
             finishName = "Foil";
         } else if ("E".equals(finish)) {
-            price = card.getFoilPriceAsBigDecimal();
+            price = card.getEtchedPriceAsBigDecimal();
             finishName = "Etched";
         } else {
             price = card.getPriceAsBigDecimal();
@@ -993,13 +1368,14 @@ public class TradePanel extends JPanel {
     private void clearPreview() {
         previewCard = null;
         previewFinish = null;
+        lastPreviewCode = null;
         cardPreviewLabel.setText("Enter a card code above...");
         cardPreviewLabel.setForeground(UIManager.getColor("Label.foreground"));
     }
 
     private void addCard() {
         if (previewCard == null) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "Please enter a valid card code",
                     "No Card",
                     JOptionPane.WARNING_MESSAGE);
@@ -1009,9 +1385,9 @@ public class TradePanel extends JPanel {
         boolean isFoil = "F".equals(previewFinish) || "E".equals(previewFinish);
 
         // Check if price is available, if not prompt for manual entry
-        if (isFoil && !previewCard.hasFoilPrice()) {
+        if ("F".equals(previewFinish) && !previewCard.hasFoilPrice()) {
             // Prompt for manual foil price
-            String priceInput = JOptionPane.showInputDialog(this,
+            String priceInput = JOptionPane.showInputDialog(getParentWindow(),
                     String.format("Card '%s' has no foil price available.\nEnter manual price:",
                             previewCard.getName()),
                     "Manual Price Entry",
@@ -1026,7 +1402,7 @@ public class TradePanel extends JPanel {
                 BigDecimal price = new BigDecimal(priceInput);
 
                 if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                    JOptionPane.showMessageDialog(this,
+                    JOptionPane.showMessageDialog(getParentWindow(),
                             "Price must be greater than $0.00",
                             "Invalid Price",
                             JOptionPane.WARNING_MESSAGE);
@@ -1036,7 +1412,40 @@ public class TradePanel extends JPanel {
                 // Set the foil price
                 previewCard.setFoilPrice(price.toString());
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this,
+                JOptionPane.showMessageDialog(getParentWindow(),
+                        "Invalid price format. Please enter a valid number.",
+                        "Invalid Price",
+                        JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        } else if ("E".equals(previewFinish) && !previewCard.hasEtchedPrice()) {
+            // Prompt for manual etched price
+            String priceInput = JOptionPane.showInputDialog(getParentWindow(),
+                    String.format("Card '%s' has no etched price available.\nEnter manual price:",
+                            previewCard.getName()),
+                    "Manual Price Entry",
+                    JOptionPane.QUESTION_MESSAGE);
+
+            if (priceInput == null || priceInput.trim().isEmpty()) {
+                return; // User cancelled
+            }
+
+            try {
+                priceInput = priceInput.replace("$", "").replace(",", "").trim();
+                BigDecimal price = new BigDecimal(priceInput);
+
+                if (price.compareTo(BigDecimal.ZERO) <= 0) {
+                    JOptionPane.showMessageDialog(getParentWindow(),
+                            "Price must be greater than $0.00",
+                            "Invalid Price",
+                            JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+
+                // Set the etched price
+                previewCard.setEtchedPrice(price.toString());
+            } catch (NumberFormatException e) {
+                JOptionPane.showMessageDialog(getParentWindow(),
                         "Invalid price format. Please enter a valid number.",
                         "Invalid Price",
                         JOptionPane.ERROR_MESSAGE);
@@ -1046,7 +1455,7 @@ public class TradePanel extends JPanel {
 
         if (!isFoil && !previewCard.hasNormalPrice()) {
             // Prompt for manual normal price
-            String priceInput = JOptionPane.showInputDialog(this,
+            String priceInput = JOptionPane.showInputDialog(getParentWindow(),
                     String.format("Card '%s' has no normal price available.\nEnter manual price:",
                             previewCard.getName()),
                     "Manual Price Entry",
@@ -1061,7 +1470,7 @@ public class TradePanel extends JPanel {
                 BigDecimal price = new BigDecimal(priceInput);
 
                 if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                    JOptionPane.showMessageDialog(this,
+                    JOptionPane.showMessageDialog(getParentWindow(),
                             "Price must be greater than $0.00",
                             "Invalid Price",
                             JOptionPane.WARNING_MESSAGE);
@@ -1071,7 +1480,7 @@ public class TradePanel extends JPanel {
                 // Set the normal price
                 previewCard.setPrice(price.toString());
             } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(this,
+                JOptionPane.showMessageDialog(getParentWindow(),
                         "Invalid price format. Please enter a valid number.",
                         "Invalid Price",
                         JOptionPane.ERROR_MESSAGE);
@@ -1079,7 +1488,7 @@ public class TradePanel extends JPanel {
             }
         }
 
-        TradeItem item = new TradeItem(previewCard, isFoil, 1);
+        TradeItem item = new TradeItem(previewCard, isFoil, 1, previewFinish);
         receivedCards.add(item);
         cardConditions.add("NM"); // Default to NM condition
 
@@ -1087,7 +1496,7 @@ public class TradePanel extends JPanel {
         String code = card.getSetCode() + " " + card.getCollectorNumber();
 
         if (isFoil) {
-            code += "E".equals(previewFinish) ? "E" : "F";
+            code += "E".equals(previewFinish) ? "e" : "f"; // Lowercase, no space
         }
 
         StringBuilder name = new StringBuilder(card.getName());
@@ -1135,6 +1544,59 @@ public class TradePanel extends JPanel {
     }
 
     /**
+     * Duplicates the selected card (adds another copy with same attributes)
+     */
+    private void duplicateSelectedCard() {
+        int row = cardTable.getSelectedRow();
+        if (row < 0) {
+            return; // No selection
+        }
+
+        // Convert view row to model row since table might be sorted
+        int modelRow = cardTable.convertRowIndexToModel(row);
+
+        // Get existing card data
+        TradeItem existingItem = receivedCards.get(modelRow);
+        String condition = (String) tableModel.getValueAt(modelRow, 3);
+        Object qtyObj = tableModel.getValueAt(modelRow, 4);
+        int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
+        String unitPrice = (String) tableModel.getValueAt(modelRow, 5);
+        String code = (String) tableModel.getValueAt(modelRow, 1);
+        String name = (String) tableModel.getValueAt(modelRow, 2);
+
+        // Calculate total
+        BigDecimal price = new BigDecimal(unitPrice.replace("$", "").replace(",", "").trim());
+        BigDecimal total = price.multiply(BigDecimal.valueOf(qty));
+
+        // Create new TradeItem copy
+        TradeItem newItem = new TradeItem(existingItem.getCard(), existingItem.isFoil());
+        newItem.setQuantity(qty);
+        newItem.setUnitPrice(price);
+
+        // Add to lists
+        receivedCards.add(newItem);
+        cardConditions.add(condition);
+
+        // Add to table
+        tableModel.addRow(new Object[]{
+                false,  // Checkbox
+                code,
+                name,
+                condition,
+                qty,
+                unitPrice,
+                String.format("$%.2f", total)
+        });
+
+        updateSummary();
+
+        // Select the newly added duplicate
+        int lastRow = cardTable.getRowCount() - 1;
+        cardTable.setRowSelectionInterval(lastRow, lastRow);
+        cardTable.scrollRectToVisible(cardTable.getCellRect(lastRow, 0, true));
+    }
+
+    /**
      * Selects or deselects all checkboxes
      */
     private void selectAllCards(boolean selected) {
@@ -1157,14 +1619,14 @@ public class TradePanel extends JPanel {
         }
 
         if (rowsToDelete.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "No cards selected for deletion",
                     "Nothing to Delete",
                     JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 
-        int confirm = JOptionPane.showConfirmDialog(this,
+        int confirm = JOptionPane.showConfirmDialog(getParentWindow(),
                 String.format("Delete %d selected card(s)?", rowsToDelete.size()),
                 "Confirm Delete",
                 JOptionPane.YES_NO_OPTION,
@@ -1285,6 +1747,11 @@ public class TradePanel extends JPanel {
         totalPriceLabel.setText(String.format("TOTAL: $%.2f (%d cards)", total, totalQty));
         halfRateLabel.setText(String.format("HALF RATE (50%%): $%.2f", halfRate));
         thirdRateLabel.setText(String.format("THIRD RATE (33%%): $%.2f", thirdRate));
+
+        // Update partial payment if it's visible
+        if (partialRadio.isSelected() && partialPaymentPanel.isVisible()) {
+            updatePartialSplit();
+        }
     }
 
     private void clearAll() {
@@ -1292,7 +1759,7 @@ public class TradePanel extends JPanel {
             return;
         }
 
-        int result = JOptionPane.showConfirmDialog(this,
+        int result = JOptionPane.showConfirmDialog(getParentWindow(),
                 "Clear all " + receivedCards.size() + " cards?",
                 "Confirm Clear",
                 JOptionPane.YES_NO_OPTION);
@@ -1308,7 +1775,7 @@ public class TradePanel extends JPanel {
 
     private void exportToPOS() {
         if (receivedCards.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "No cards to export",
                     "Empty List",
                     JOptionPane.WARNING_MESSAGE);
@@ -1351,7 +1818,7 @@ public class TradePanel extends JPanel {
         }
 
         if (nonMiscCards.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "No cards to export - all cards are MISC cards.\n" +
                             "MISC cards are excluded from POS import.",
                     "Nothing to Export",
@@ -1362,12 +1829,51 @@ public class TradePanel extends JPanel {
         try {
             // Determine payment type
             String paymentType;
+            String paymentDisplay;
+
             if (inventoryRadio.isSelected()) {
                 paymentType = "inventory";
+                paymentDisplay = "Inventory (0%)";
             } else if (checkRadio.isSelected()) {
                 paymentType = "check";
+                paymentDisplay = "Check (33%)";
+            } else if (partialRadio.isSelected()) {
+                // Validate partial payment
+                try {
+                    String creditText = partialCreditField.getText().trim();
+                    String checkText = partialCheckField.getText().trim();
+
+                    BigDecimal credit = creditText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(creditText);
+                    BigDecimal check = checkText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(checkText);
+                    BigDecimal sum = credit.add(check);
+                    BigDecimal total = calculateTotalValue(nonMiscCards);
+
+                    if (sum.compareTo(total) != 0) {
+                        JOptionPane.showMessageDialog(getParentWindow(),
+                                String.format("Partial payment amounts don't match trade total!\n\n" +
+                                                "Credit: $%.2f\n" +
+                                                "Check: $%.2f\n" +
+                                                "Sum: $%.2f\n" +
+                                                "Trade Total: $%.2f\n\n" +
+                                                "Please adjust the amounts to equal the trade total.",
+                                        credit, check, sum, total),
+                                "Invalid Partial Payment",
+                                JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+
+                    paymentType = "partial";
+                    paymentDisplay = String.format("Partial (Credit: $%.2f + Check: $%.2f)", credit, check);
+                } catch (NumberFormatException e) {
+                    JOptionPane.showMessageDialog(getParentWindow(),
+                            "Invalid partial payment amounts. Please enter valid numbers.",
+                            "Invalid Input",
+                            JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
             } else {
                 paymentType = "credit"; // Store credit
+                paymentDisplay = "Store Credit (50%)";
             }
 
             // Use new method with table values and payment type
@@ -1383,19 +1889,18 @@ public class TradePanel extends JPanel {
                     filename,
                     nonMiscCards.size(),
                     calculateTotalValue(nonMiscCards),
-                    paymentType.equals("credit") ? "Store Credit (50%)" :
-                            paymentType.equals("check") ? "Check (33%)" : "Inventory (0%)");
+                    paymentDisplay);
 
             if (miscCount > 0) {
                 message += String.format("\n\nNote: %d MISC card(s) were excluded from export.", miscCount);
             }
 
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     message,
                     "Export Complete",
                     JOptionPane.INFORMATION_MESSAGE);
         } catch (Exception e) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "Export failed: " + e.getMessage(),
                     "Error",
                     JOptionPane.ERROR_MESSAGE);
@@ -1405,7 +1910,7 @@ public class TradePanel extends JPanel {
 
     private void saveList() {
         if (receivedCards.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "No cards to save",
                     "Empty List",
                     JOptionPane.WARNING_MESSAGE);
@@ -1459,12 +1964,12 @@ public class TradePanel extends JPanel {
                     quantities
             );
 
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     String.format("Card list saved!\n\nFile: %s", filename),
                     "Saved",
                     JOptionPane.INFORMATION_MESSAGE);
         } catch (Exception e) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "Save failed: " + e.getMessage(),
                     "Error",
                     JOptionPane.ERROR_MESSAGE);
@@ -1531,13 +2036,22 @@ public class TradePanel extends JPanel {
 
         input = input.trim().toUpperCase().replaceAll("\\s+", " ");
 
+        // Check for finish indicators at the end
         String finish = "";
-        if (input.endsWith("F")) {
-            finish = "F";
-            input = input.substring(0, input.length() - 1).trim();
-        } else if (input.endsWith("E")) {
-            finish = "E";
-            input = input.substring(0, input.length() - 1).trim();
+        if (input.endsWith("F") && !input.matches(".*\\d+F$")) {
+            // Only treat as foil if it's after a space or clearly separate
+            String[] temp = input.split(" ");
+            if (temp[temp.length - 1].equals("F")) {
+                finish = "F";
+                input = input.substring(0, input.length() - 1).trim();
+            }
+        } else if (input.endsWith("E") && !input.matches(".*\\d+E$")) {
+            // Only treat as etched if it's after a space or clearly separate
+            String[] temp = input.split(" ");
+            if (temp[temp.length - 1].equals("E")) {
+                finish = "E";
+                input = input.substring(0, input.length() - 1).trim();
+            }
         }
 
         String[] parts = input.split(" ");
@@ -1546,20 +2060,29 @@ public class TradePanel extends JPanel {
         }
 
         String setCode = parts[0].toUpperCase();
-        String collectorNumber = parts[1];
 
+        // Collector number may have letter suffixes (e.g., "143b", "5a")
+        StringBuilder collectorNumber = new StringBuilder();
+        for (int i = 1; i < parts.length; i++) {
+            collectorNumber.append(parts[i]);
+        }
+
+        // Handle case where user types without space (e.g., "CHR143B")
         if (parts.length == 1 && parts[0].length() > 3) {
             String combined = parts[0];
             if (combined.length() >= 4) {
                 setCode = combined.substring(0, 3);
-                collectorNumber = combined.substring(3);
+                collectorNumber = new StringBuilder(combined.substring(3));
             }
         }
 
         // Apply set conversion mapping (e.g., CHK -> chk for Scryfall API)
         String apiSetCode = SetList.toScryfallCode(setCode);
 
-        return new ParsedCode(apiSetCode, collectorNumber, finish);
+        // Scryfall expects lowercase collector numbers with letter suffixes
+        String apiCollectorNumber = collectorNumber.toString().toLowerCase();
+
+        return new ParsedCode(apiSetCode, apiCollectorNumber, finish);
     }
 
     private String capitalize(String str) {
@@ -1610,14 +2133,14 @@ public class TradePanel extends JPanel {
      */
     private void addToInventory() {
         if (receivedCards.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "No cards in trade to add to inventory",
                     "Empty Trade",
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
 
-        int confirm = JOptionPane.showConfirmDialog(this,
+        int confirm = JOptionPane.showConfirmDialog(getParentWindow(),
                 String.format("Add %d card(s) to inventory?\n\nThis will export in Item Wizard Change Qty format.",
                         receivedCards.size()),
                 "Confirm Add to Inventory",
@@ -1634,13 +2157,13 @@ public class TradePanel extends JPanel {
                 String filename = exportService.exportToInventoryFormat(
                         receivedCards, cardConditions, quantities);
 
-                JOptionPane.showMessageDialog(this,
+                JOptionPane.showMessageDialog(getParentWindow(),
                         String.format("Cards added to inventory!\n\nFile: %s\n\nMISC cards were excluded from export.",
                                 filename),
                         "Inventory Updated",
                         JOptionPane.INFORMATION_MESSAGE);
             } catch (Exception ex) {
-                JOptionPane.showMessageDialog(this,
+                JOptionPane.showMessageDialog(getParentWindow(),
                         "Failed to add to inventory: " + ex.getMessage(),
                         "Error",
                         JOptionPane.ERROR_MESSAGE);
@@ -1683,11 +2206,18 @@ public class TradePanel extends JPanel {
                 }
             }
         } catch (Exception e) {
-            JOptionPane.showMessageDialog(this,
+            JOptionPane.showMessageDialog(getParentWindow(),
                     "Could not open browser.\n\nURL: " + url + "\n\nPlease copy and paste this URL into your browser.",
                     "Browser Error",
                     JOptionPane.INFORMATION_MESSAGE);
         }
+    }
+
+    /**
+     * Gets the parent window for centering dialogs
+     */
+    private Window getParentWindow() {
+        return SwingUtilities.getWindowAncestor(this);
     }
 
     private static class ParsedCode {

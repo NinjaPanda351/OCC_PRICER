@@ -11,6 +11,7 @@ public class Card {
     private String myRarity;
     private String myPrice;
     private String myFoilPrice;
+    private String myEtchedPrice;
     private List<String> myFrameEffects;
     private String myArtist;
 
@@ -18,6 +19,7 @@ public class Card {
     public Card() {
         this.myPrice = "N/A";
         this.myFoilPrice = "N/A";
+        this.myEtchedPrice = "N/A";
         this.myFrameEffects = new ArrayList<>();
     }
 
@@ -119,6 +121,33 @@ public class Card {
             }
         }
         this.myFoilPrice = theFoilPrice;
+    }
+
+    public String getEtchedPrice() {
+        return this.myEtchedPrice;
+    }
+
+    public BigDecimal getEtchedPriceAsBigDecimal() {
+        return parsePriceString(this.myEtchedPrice);
+    }
+
+    public void setEtchedPrice(final String theEtchedPrice) {
+        if (theEtchedPrice == null) {
+            this.myEtchedPrice = "N/A";
+            return;
+        }
+        if (!theEtchedPrice.equals("N/A")) {
+            try {
+                new BigDecimal(theEtchedPrice);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid etched price format: " + theEtchedPrice);
+            }
+        }
+        this.myEtchedPrice = theEtchedPrice;
+    }
+
+    public boolean hasEtchedPrice() {
+        return !this.myEtchedPrice.equals("N/A");
     }
 
     public List<String> getFrameEffects() {
