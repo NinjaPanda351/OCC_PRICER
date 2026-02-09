@@ -170,7 +170,7 @@ public class TradePanel extends JPanel {
 
         ButtonGroup paymentGroup = new ButtonGroup();
         storeCreditRadio = new JRadioButton("Store Credit (50%)");
-        checkRadio = new JRadioButton("Check (33%)");
+        checkRadio = new JRadioButton("Check (33.33%)");
         inventoryRadio = new JRadioButton("Inventory (No Payout)");
         partialRadio = new JRadioButton("Partial (Split Payment)");
 
@@ -834,13 +834,16 @@ public class TradePanel extends JPanel {
     }
 
     private void updatePartialCheck() {
-        // User typed in credit field, auto-calculate check amount
+        // User typed in credit payout amount, calculate check payout needed
+        // Formula: If customer wants $X credit, they need (X / 0.50) card value for credit
+        //          Remaining value = Total - (X / 0.50)
+        //          Check payout = Remaining value / 3 (exact 1/3, not 0.33)
         try {
             String totalText = totalPriceLabel.getText();
             String[] parts = totalText.split("\\$");
             if (parts.length > 1) {
                 String numberPart = parts[1].split(" ")[0].replace(",", "");
-                BigDecimal total = new BigDecimal(numberPart);
+                BigDecimal totalValue = new BigDecimal(numberPart);
 
                 String creditText = partialCreditField.getText().trim();
                 if (creditText.isEmpty()) {
@@ -849,14 +852,22 @@ public class TradePanel extends JPanel {
                     return;
                 }
 
-                BigDecimal credit = new BigDecimal(creditText.replace(",", ""));
-                BigDecimal check = total.subtract(credit);
+                BigDecimal creditPayout = new BigDecimal(creditText.replace(",", ""));
 
-                if (check.compareTo(BigDecimal.ZERO) < 0) {
-                    check = BigDecimal.ZERO;
+                // Calculate card value needed for this credit payout (credit is 50% of value)
+                BigDecimal valueUsedForCredit = creditPayout.divide(new BigDecimal("0.50"), 2, RoundingMode.HALF_UP);
+
+                // Remaining card value
+                BigDecimal remainingValue = totalValue.subtract(valueUsedForCredit);
+
+                if (remainingValue.compareTo(BigDecimal.ZERO) < 0) {
+                    remainingValue = BigDecimal.ZERO;
                 }
 
-                partialCheckField.setText(String.format("%.2f", check));
+                // Check payout is 1/3 of remaining value (exact division by 3)
+                BigDecimal checkPayout = remainingValue.divide(new BigDecimal("3"), 2, RoundingMode.HALF_UP);
+
+                partialCheckField.setText(String.format("%.2f", checkPayout));
                 updatePartialTotal();
             }
         } catch (Exception e) {
@@ -865,13 +876,16 @@ public class TradePanel extends JPanel {
     }
 
     private void updatePartialCredit() {
-        // User typed in check field, auto-calculate credit amount
+        // User typed in check payout amount, calculate credit payout for remaining value
+        // Formula: If customer wants $X check, they need (X * 3) card value for check (since check = value/3)
+        //          Remaining value = Total - (X * 3)
+        //          Credit payout = Remaining value * 0.50
         try {
             String totalText = totalPriceLabel.getText();
             String[] parts = totalText.split("\\$");
             if (parts.length > 1) {
                 String numberPart = parts[1].split(" ")[0].replace(",", "");
-                BigDecimal total = new BigDecimal(numberPart);
+                BigDecimal totalValue = new BigDecimal(numberPart);
 
                 String checkText = partialCheckField.getText().trim();
                 if (checkText.isEmpty()) {
@@ -880,14 +894,22 @@ public class TradePanel extends JPanel {
                     return;
                 }
 
-                BigDecimal check = new BigDecimal(checkText.replace(",", ""));
-                BigDecimal credit = total.subtract(check);
+                BigDecimal checkPayout = new BigDecimal(checkText.replace(",", ""));
 
-                if (credit.compareTo(BigDecimal.ZERO) < 0) {
-                    credit = BigDecimal.ZERO;
+                // Calculate card value needed for this check payout (check is 1/3 of value, so value = check * 3)
+                BigDecimal valueUsedForCheck = checkPayout.multiply(new BigDecimal("3"));
+
+                // Remaining card value
+                BigDecimal remainingValue = totalValue.subtract(valueUsedForCheck);
+
+                if (remainingValue.compareTo(BigDecimal.ZERO) < 0) {
+                    remainingValue = BigDecimal.ZERO;
                 }
 
-                partialCreditField.setText(String.format("%.2f", credit));
+                // Credit payout is 50% of remaining value
+                BigDecimal creditPayout = remainingValue.multiply(new BigDecimal("0.50")).setScale(2, RoundingMode.HALF_UP);
+
+                partialCreditField.setText(String.format("%.2f", creditPayout));
                 updatePartialTotal();
             }
         } catch (Exception e) {
@@ -900,9 +922,15 @@ public class TradePanel extends JPanel {
             String creditText = partialCreditField.getText().trim();
             String checkText = partialCheckField.getText().trim();
 
-            BigDecimal credit = creditText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(creditText.replace(",", ""));
-            BigDecimal check = checkText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(checkText.replace(",", ""));
-            BigDecimal sum = credit.add(check);
+            BigDecimal creditPayout = creditText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(creditText.replace(",", ""));
+            BigDecimal checkPayout = checkText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(checkText.replace(",", ""));
+
+            // Calculate card value used
+            // Credit is 1/2 of value, so value = credit * 2
+            BigDecimal valueForCredit = creditPayout.divide(new BigDecimal("0.50"), 2, RoundingMode.HALF_UP);
+            // Check is 1/3 of value, so value = check * 3
+            BigDecimal valueForCheck = checkPayout.multiply(new BigDecimal("3"));
+            BigDecimal totalValueUsed = valueForCredit.add(valueForCheck);
 
             // Find the equals label in the panel
             Component[] components = partialPaymentPanel.getComponents();
@@ -910,16 +938,19 @@ public class TradePanel extends JPanel {
                 if (comp instanceof JLabel) {
                     JLabel label = (JLabel) comp;
                     if (label.getText().startsWith("  =  ")) {
-                        label.setText(String.format("  =  $%.2f", sum));
+                        label.setText(String.format("  =  $%.2f value used", totalValueUsed));
 
-                        // Validate against total
+                        // Validate against total card value
                         String totalText = totalPriceLabel.getText();
                         String[] parts = totalText.split("\\$");
                         if (parts.length > 1) {
                             String numberPart = parts[1].split(" ")[0].replace(",", "");
-                            BigDecimal total = new BigDecimal(numberPart);
+                            BigDecimal totalCardValue = new BigDecimal(numberPart);
 
-                            if (sum.compareTo(total) == 0) {
+                            // Allow small rounding differences (within $0.10)
+                            BigDecimal diff = totalValueUsed.subtract(totalCardValue).abs();
+
+                            if (diff.compareTo(new BigDecimal("0.10")) <= 0) {
                                 label.setForeground(new Color(0, 150, 0)); // Green if matches
                             } else {
                                 label.setForeground(Color.RED); // Red if doesn't match
@@ -1742,11 +1773,11 @@ public class TradePanel extends JPanel {
         }
 
         BigDecimal halfRate = total.multiply(new BigDecimal("0.50")).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal thirdRate = total.multiply(new BigDecimal("0.33")).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal thirdRate = total.divide(new BigDecimal("3"), 2, RoundingMode.HALF_UP);
 
         totalPriceLabel.setText(String.format("TOTAL: $%.2f (%d cards)", total, totalQty));
         halfRateLabel.setText(String.format("HALF RATE (50%%): $%.2f", halfRate));
-        thirdRateLabel.setText(String.format("THIRD RATE (33%%): $%.2f", thirdRate));
+        thirdRateLabel.setText(String.format("THIRD RATE (33.33%%): $%.2f", thirdRate));
 
         // Update partial payment if it's visible
         if (partialRadio.isSelected() && partialPaymentPanel.isVisible()) {
@@ -1836,34 +1867,45 @@ public class TradePanel extends JPanel {
                 paymentDisplay = "Inventory (0%)";
             } else if (checkRadio.isSelected()) {
                 paymentType = "check";
-                paymentDisplay = "Check (33%)";
+                paymentDisplay = "Check (33.33%)";
             } else if (partialRadio.isSelected()) {
-                // Validate partial payment
+                // Validate partial payment - check that card value is fully used
                 try {
                     String creditText = partialCreditField.getText().trim();
                     String checkText = partialCheckField.getText().trim();
 
-                    BigDecimal credit = creditText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(creditText);
-                    BigDecimal check = checkText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(checkText);
-                    BigDecimal sum = credit.add(check);
-                    BigDecimal total = calculateTotalValue(nonMiscCards);
+                    BigDecimal creditPayout = creditText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(creditText);
+                    BigDecimal checkPayout = checkText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(checkText);
 
-                    if (sum.compareTo(total) != 0) {
+                    // Calculate card value used
+                    // Credit payout uses: creditPayout / 0.50 of card value (credit = value * 0.5, so value = credit / 0.5)
+                    // Check payout uses: checkPayout * 3 of card value (check = value / 3, so value = check * 3)
+                    BigDecimal valueForCredit = creditPayout.divide(new BigDecimal("0.50"), 2, RoundingMode.HALF_UP);
+                    BigDecimal valueForCheck = checkPayout.multiply(new BigDecimal("3"));
+                    BigDecimal totalValueUsed = valueForCredit.add(valueForCheck);
+
+                    BigDecimal totalCardValue = calculateTotalValue(nonMiscCards);
+
+                    // Allow small rounding differences (within $0.10)
+                    BigDecimal diff = totalValueUsed.subtract(totalCardValue).abs();
+                    if (diff.compareTo(new BigDecimal("0.10")) > 0) {
                         JOptionPane.showMessageDialog(getParentWindow(),
-                                String.format("Partial payment amounts don't match trade total!\n\n" +
-                                                "Credit: $%.2f\n" +
-                                                "Check: $%.2f\n" +
-                                                "Sum: $%.2f\n" +
-                                                "Trade Total: $%.2f\n\n" +
-                                                "Please adjust the amounts to equal the trade total.",
-                                        credit, check, sum, total),
+                                String.format("Partial payment doesn't match trade value!\n\n" +
+                                                "Card Value: $%.2f\n" +
+                                                "Credit Payout: $%.2f (uses $%.2f value @ 50%%)\n" +
+                                                "Check Payout: $%.2f (uses $%.2f value @ 33%%)\n" +
+                                                "Total Value Used: $%.2f\n\n" +
+                                                "Difference: $%.2f\n\n" +
+                                                "Please adjust the amounts.",
+                                        totalCardValue, creditPayout, valueForCredit,
+                                        checkPayout, valueForCheck, totalValueUsed, diff),
                                 "Invalid Partial Payment",
                                 JOptionPane.ERROR_MESSAGE);
                         return;
                     }
 
                     paymentType = "partial";
-                    paymentDisplay = String.format("Partial (Credit: $%.2f + Check: $%.2f)", credit, check);
+                    paymentDisplay = String.format("Partial (Credit: $%.2f + Check: $%.2f)", creditPayout, checkPayout);
                 } catch (NumberFormatException e) {
                     JOptionPane.showMessageDialog(getParentWindow(),
                             "Invalid partial payment amounts. Please enter valid numbers.",
@@ -2036,22 +2078,16 @@ public class TradePanel extends JPanel {
 
         input = input.trim().toUpperCase().replaceAll("\\s+", " ");
 
-        // Check for finish indicators at the end
+        // Check for finish indicators - handle both "1f" and "1 f" formats
         String finish = "";
-        if (input.endsWith("F") && !input.matches(".*\\d+F$")) {
-            // Only treat as foil if it's after a space or clearly separate
-            String[] temp = input.split(" ");
-            if (temp[temp.length - 1].equals("F")) {
-                finish = "F";
-                input = input.substring(0, input.length() - 1).trim();
-            }
-        } else if (input.endsWith("E") && !input.matches(".*\\d+E$")) {
-            // Only treat as etched if it's after a space or clearly separate
-            String[] temp = input.split(" ");
-            if (temp[temp.length - 1].equals("E")) {
-                finish = "E";
-                input = input.substring(0, input.length() - 1).trim();
-            }
+
+        // Check if ends with 'f' or 'e' (case insensitive, already uppercased)
+        if (input.endsWith("F")) {
+            finish = "F";
+            input = input.substring(0, input.length() - 1).trim();
+        } else if (input.endsWith("E")) {
+            finish = "E";
+            input = input.substring(0, input.length() - 1).trim();
         }
 
         String[] parts = input.split(" ");
@@ -2097,7 +2133,7 @@ public class TradePanel extends JPanel {
                 .append(parsed.collectorNumber);
 
         if (!parsed.finish.isEmpty()) {
-            formatted.append(parsed.finish.toUpperCase());
+            formatted.append(parsed.finish.toLowerCase()); // Lowercase, no space
         }
 
         return formatted.toString();

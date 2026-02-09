@@ -119,11 +119,11 @@ public class TradeReceivingExportService {
                 if ("inventory".equalsIgnoreCase(paymentType)) {
                     cost = BigDecimal.ZERO; // Inventory = no cost
                 } else if ("check".equalsIgnoreCase(paymentType)) {
-                    cost = price.multiply(new BigDecimal("0.33")).setScale(2, java.math.RoundingMode.HALF_UP); // 33%
+                    cost = price.divide(new BigDecimal("3"), 2, java.math.RoundingMode.HALF_UP); // Exact 1/3
                 } else if ("partial".equalsIgnoreCase(paymentType)) {
-                    // Partial payment: use weighted average of credit (50%) and check (33%)
-                    // Approximate as 41.5% (average of 50% and 33%)
-                    cost = price.multiply(new BigDecimal("0.415")).setScale(2, java.math.RoundingMode.HALF_UP);
+                    // Partial payment: use weighted average of credit (50%) and check (33.33%)
+                    // Approximate as 41.67% (average of 50% and 33.33%)
+                    cost = price.multiply(new BigDecimal("0.4167")).setScale(2, java.math.RoundingMode.HALF_UP);
                 } else {
                     // Default to store credit
                     cost = price.multiply(new BigDecimal("0.50")).setScale(2, java.math.RoundingMode.HALF_UP); // 50%
