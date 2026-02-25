@@ -6,6 +6,7 @@ import com.cardpricer.model.Card;
 import com.cardpricer.model.TradeItem;
 import com.cardpricer.service.ScryfallApiService;
 import com.cardpricer.service.TradeReceivingExportService;
+import com.cardpricer.util.CardConstants;
 import com.cardpricer.util.SetList;
 
 import javax.swing.*;
@@ -69,16 +70,19 @@ public class TradePanel extends JPanel {
     private String lastPreviewCode; // Track what code the preview is showing
     private String previewFinish;
 
-    // Condition options
-    private static final String[] CONDITIONS = {"NM", "LP", "MP", "HP", "DMG"};
-
-    // Condition multipliers (NM = 1.0, each tier = 0.8 of previous)
-    private static final double[] CONDITION_MULTIPLIERS = {
-            1.0,    // NM - Market Price
-            0.8,    // LP - 80% of NM
-            0.64,   // MP - 80% of LP (0.8 * 0.8)
-            0.512,  // HP - 80% of MP (0.8 * 0.8 * 0.8)
-            0.4096  // DMG - 80% of HP (0.8 * 0.8 * 0.8 * 0.8)
+    /**
+     * Comparator for price columns that parses {@code "$1.23"}-style strings into
+     * {@link BigDecimal} values for numeric ordering. Falls back to lexicographic
+     * comparison if parsing fails.
+     */
+    private static final java.util.Comparator<String> PRICE_COMPARATOR = (s1, s2) -> {
+        try {
+            BigDecimal p1 = new BigDecimal(s1.replace("$", "").replace(",", "").trim());
+            BigDecimal p2 = new BigDecimal(s2.replace("$", "").replace(",", "").trim());
+            return p1.compareTo(p2);
+        } catch (Exception e) {
+            return s1.compareTo(s2);
+        }
     };
 
     public TradePanel() {
@@ -358,36 +362,12 @@ public class TradePanel extends JPanel {
         cardTable.setRowSorter(sorter);
         // Don't trigger any initial sort - maintains insertion order
 
-        // Custom comparator for the Unit Price column (column 5)
-        sorter.setComparator(5, new java.util.Comparator<String>() {
-            @Override
-            public int compare(String s1, String s2) {
-                try {
-                    BigDecimal price1 = new BigDecimal(s1.replace("$", "").replace(",", "").trim());
-                    BigDecimal price2 = new BigDecimal(s2.replace("$", "").replace(",", "").trim());
-                    return price1.compareTo(price2);
-                } catch (Exception e) {
-                    return s1.compareTo(s2);
-                }
-            }
-        });
-
-        // Custom comparator for the Total column (column 6)
-        sorter.setComparator(6, new java.util.Comparator<String>() {
-            @Override
-            public int compare(String s1, String s2) {
-                try {
-                    BigDecimal price1 = new BigDecimal(s1.replace("$", "").replace(",", "").trim());
-                    BigDecimal price2 = new BigDecimal(s2.replace("$", "").replace(",", "").trim());
-                    return price1.compareTo(price2);
-                } catch (Exception e) {
-                    return s1.compareTo(s2);
-                }
-            }
-        });
+        // Numeric price comparator for the Unit Price column (column 5) and Total column (column 6)
+        sorter.setComparator(5, PRICE_COMPARATOR);
+        sorter.setComparator(6, PRICE_COMPARATOR);
 
         // Set up condition dropdown
-        JComboBox<String> conditionCombo = new JComboBox<>(CONDITIONS);
+        JComboBox<String> conditionCombo = new JComboBox<>(CardConstants.CONDITIONS);
         DefaultCellEditor conditionEditor = new DefaultCellEditor(conditionCombo) {
             @Override
             public boolean stopCellEditing() {
@@ -1706,19 +1686,20 @@ public class TradePanel extends JPanel {
     }
 
     /**
-     * Applies condition multiplier to a price and re-applies rounding rules
+     * Applies condition multiplier to a price and re-applies rounding rules.
      */
     private BigDecimal applyConditionMultiplier(BigDecimal basePrice, String condition) {
         int conditionIndex = getConditionIndex(condition);
-        double multiplier = CONDITION_MULTIPLIERS[conditionIndex];
+        double multiplier = CardConstants.CONDITION_MULTIPLIERS[conditionIndex];
 
         BigDecimal adjustedPrice = basePrice.multiply(BigDecimal.valueOf(multiplier));
 
         // Re-apply rounding rules to the condition-adjusted price
-        if (adjustedPrice.compareTo(BigDecimal.TEN) < 0) {
+        if (adjustedPrice.compareTo(CardConstants.ROUNDING_THRESHOLD) < 0) {
             // Below $10 - round to nearest $0.50
-            BigDecimal rounded = adjustedPrice.divide(new BigDecimal("0.5"), 0, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("0.5"));
+            BigDecimal rounded = adjustedPrice
+                    .divide(CardConstants.ROUNDING_STEP_LOW, 0, RoundingMode.HALF_UP)
+                    .multiply(CardConstants.ROUNDING_STEP_LOW);
             return rounded;
         } else {
             // $10 and above - round to nearest $1.00
@@ -1727,11 +1708,12 @@ public class TradePanel extends JPanel {
     }
 
     /**
-     * Gets the index of a condition in the CONDITIONS array
+     * Gets the index of a condition in the {@link CardConstants#CONDITIONS} array.
+     * Returns {@code 0} (NM) for unrecognised values.
      */
     private int getConditionIndex(String condition) {
-        for (int i = 0; i < CONDITIONS.length; i++) {
-            if (CONDITIONS[i].equals(condition)) {
+        for (int i = 0; i < CardConstants.CONDITIONS.length; i++) {
+            if (CardConstants.CONDITIONS[i].equals(condition)) {
                 return i;
             }
         }

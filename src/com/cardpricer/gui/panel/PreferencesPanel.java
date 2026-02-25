@@ -6,54 +6,76 @@ import com.formdev.flatlaf.themes.*;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.prefs.Preferences;
 
 /**
- * Panel for application preferences and settings
+ * Panel for application preferences and settings.
  */
 public class PreferencesPanel extends JPanel {
+
+    /**
+     * Functional interface for a theme-application action that may throw a checked exception.
+     */
+    @FunctionalInterface
+    private interface ThemeApplier {
+        void apply() throws Exception;
+    }
 
     private static final Preferences prefs = Preferences.userNodeForPackage(PreferencesPanel.class);
     private static final String THEME_KEY = "app.theme";
 
-    // Available themes
-    private static final String[] THEMES = {
-            "FlatLaf Dark",
-            "FlatLaf Light",
-            "FlatLaf Darcula",
-            "FlatLaf IntelliJ",
-            "FlatLaf macOS Dark",
-            "FlatLaf macOS Light",
-            "Arc",
-            "Arc Orange",
-            "Arc Dark",
-            "Arc Dark Orange",
-            "Carbon",
-            "Cobalt 2",
-            "Cyan Light",
-            "Dark Flat",
-            "Dark Purple",
-            "Dracula",
-            "Gradianto Dark Fuchsia",
-            "Gradianto Deep Ocean",
-            "Gradianto Midnight Blue",
-            "Gradianto Nature Green",
-            "Gruvbox Dark Hard",
-            "Gruvbox Dark Medium",
-            "Gruvbox Dark Soft",
-            "Hiberbee Dark",
-            "High Contrast",
-            "Light Flat",
-            "Material Design Dark",
-            "Monocai",
-            "Monokai Pro",
-            "Nord",
-            "One Dark",
-            "Solarized Dark",
-            "Solarized Light",
-            "Spacegray",
-            "Vuesion"
-    };
+    /**
+     * Registry mapping theme display names to their application actions.
+     * Evaluated lazily at class-load time; new themes can be added here without
+     * modifying {@link #applyThemeByName(String)}.
+     */
+    private static final Map<String, ThemeApplier> THEME_REGISTRY = new LinkedHashMap<>();
+
+    static {
+        // Core FlatLaf themes
+        THEME_REGISTRY.put("FlatLaf Dark",        FlatDarkLaf::setup);
+        THEME_REGISTRY.put("FlatLaf Light",       FlatLightLaf::setup);
+        THEME_REGISTRY.put("FlatLaf Darcula",     FlatDarculaLaf::setup);
+        THEME_REGISTRY.put("FlatLaf IntelliJ",    FlatIntelliJLaf::setup);
+        THEME_REGISTRY.put("FlatLaf macOS Dark",  FlatMacDarkLaf::setup);
+        THEME_REGISTRY.put("FlatLaf macOS Light", FlatMacLightLaf::setup);
+
+        // IntelliJ Themes Pack (requires flatlaf-intellij-themes.jar)
+        THEME_REGISTRY.put("Arc",                     () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatArcIJTheme"));
+        THEME_REGISTRY.put("Arc Orange",              () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatArcOrangeIJTheme"));
+        THEME_REGISTRY.put("Arc Dark",                () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatArcDarkIJTheme"));
+        THEME_REGISTRY.put("Arc Dark Orange",         () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatArcDarkOrangeIJTheme"));
+        THEME_REGISTRY.put("Carbon",                  () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatCarbonIJTheme"));
+        THEME_REGISTRY.put("Cobalt 2",                () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatCobalt2IJTheme"));
+        THEME_REGISTRY.put("Cyan Light",              () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatCyanLightIJTheme"));
+        THEME_REGISTRY.put("Dark Flat",               () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatDarkFlatIJTheme"));
+        THEME_REGISTRY.put("Dark Purple",             () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatDarkPurpleIJTheme"));
+        THEME_REGISTRY.put("Dracula",                 () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatDraculaIJTheme"));
+        THEME_REGISTRY.put("Gradianto Dark Fuchsia",  () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGradiantoDarkFuchsiaIJTheme"));
+        THEME_REGISTRY.put("Gradianto Deep Ocean",    () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGradiantoDeepOceanIJTheme"));
+        THEME_REGISTRY.put("Gradianto Midnight Blue", () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGradiantoMidnightBlueIJTheme"));
+        THEME_REGISTRY.put("Gradianto Nature Green",  () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGradiantoNatureGreenIJTheme"));
+        THEME_REGISTRY.put("Gruvbox Dark Hard",       () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGruvboxDarkHardIJTheme"));
+        THEME_REGISTRY.put("Gruvbox Dark Medium",     () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGruvboxDarkMediumIJTheme"));
+        THEME_REGISTRY.put("Gruvbox Dark Soft",       () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGruvboxDarkSoftIJTheme"));
+        THEME_REGISTRY.put("Hiberbee Dark",           () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatHiberbeeDarkIJTheme"));
+        THEME_REGISTRY.put("High Contrast",           () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatHighContrastIJTheme"));
+        THEME_REGISTRY.put("Light Flat",              () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatLightFlatIJTheme"));
+        THEME_REGISTRY.put("Material Design Dark",    () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatMaterialDesignDarkIJTheme"));
+        THEME_REGISTRY.put("Monocai",                 () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatMonocaiIJTheme"));
+        THEME_REGISTRY.put("Monokai Pro",             () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatMonokaiProIJTheme"));
+        THEME_REGISTRY.put("Nord",                    () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatNordIJTheme"));
+        THEME_REGISTRY.put("One Dark",                () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatOneDarkIJTheme"));
+        THEME_REGISTRY.put("Solarized Dark",          () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatSolarizedDarkIJTheme"));
+        THEME_REGISTRY.put("Solarized Light",         () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatSolarizedLightIJTheme"));
+        THEME_REGISTRY.put("Spacegray",               () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatSpacegrayIJTheme"));
+        THEME_REGISTRY.put("Vuesion",                 () -> UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatVuesionIJTheme"));
+    }
+
+    // Available themes (derived from registry keys to keep a single source of truth)
+    private static final String[] THEMES = THEME_REGISTRY.keySet().toArray(new String[0]);
 
     private JComboBox<String> themeCombo;
     private JButton applyButton;
@@ -204,123 +226,15 @@ public class PreferencesPanel extends JPanel {
     }
 
     /**
-     * Applies a theme by name
+     * Applies a theme by name using {@link #THEME_REGISTRY}.
+     * Falls back to FlatLaf Dark if the requested theme is not found or fails to load.
+     *
+     * @param themeName display name of the theme to apply
      */
     private static void applyThemeByName(String themeName) {
+        ThemeApplier applier = THEME_REGISTRY.getOrDefault(themeName, FlatDarkLaf::setup);
         try {
-            switch (themeName) {
-                // Core FlatLaf themes
-                case "FlatLaf Dark":
-                    FlatDarkLaf.setup();
-                    break;
-                case "FlatLaf Light":
-                    FlatLightLaf.setup();
-                    break;
-                case "FlatLaf Darcula":
-                    FlatDarculaLaf.setup();
-                    break;
-                case "FlatLaf IntelliJ":
-                    FlatIntelliJLaf.setup();
-                    break;
-                case "FlatLaf macOS Dark":
-                    FlatMacDarkLaf.setup();
-                    break;
-                case "FlatLaf macOS Light":
-                    FlatMacLightLaf.setup();
-                    break;
-
-                // IntelliJ Themes Pack (require flatlaf-intellij-themes.jar)
-                case "Arc":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatArcIJTheme");
-                    break;
-                case "Arc Orange":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatArcOrangeIJTheme");
-                    break;
-                case "Arc Dark":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatArcDarkIJTheme");
-                    break;
-                case "Arc Dark Orange":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatArcDarkOrangeIJTheme");
-                    break;
-                case "Carbon":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatCarbonIJTheme");
-                    break;
-                case "Cobalt 2":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatCobalt2IJTheme");
-                    break;
-                case "Cyan Light":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatCyanLightIJTheme");
-                    break;
-                case "Dark Flat":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatDarkFlatIJTheme");
-                    break;
-                case "Dark Purple":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatDarkPurpleIJTheme");
-                    break;
-                case "Dracula":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatDraculaIJTheme");
-                    break;
-                case "Gradianto Dark Fuchsia":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGradiantoDarkFuchsiaIJTheme");
-                    break;
-                case "Gradianto Deep Ocean":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGradiantoDeepOceanIJTheme");
-                    break;
-                case "Gradianto Midnight Blue":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGradiantoMidnightBlueIJTheme");
-                    break;
-                case "Gradianto Nature Green":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGradiantoNatureGreenIJTheme");
-                    break;
-                case "Gruvbox Dark Hard":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGruvboxDarkHardIJTheme");
-                    break;
-                case "Gruvbox Dark Medium":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGruvboxDarkMediumIJTheme");
-                    break;
-                case "Gruvbox Dark Soft":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatGruvboxDarkSoftIJTheme");
-                    break;
-                case "Hiberbee Dark":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatHiberbeeDarkIJTheme");
-                    break;
-                case "High Contrast":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatHighContrastIJTheme");
-                    break;
-                case "Light Flat":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatLightFlatIJTheme");
-                    break;
-                case "Material Design Dark":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatMaterialDesignDarkIJTheme");
-                    break;
-                case "Monocai":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatMonocaiIJTheme");
-                    break;
-                case "Monokai Pro":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatMonokaiProIJTheme");
-                    break;
-                case "Nord":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatNordIJTheme");
-                    break;
-                case "One Dark":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatOneDarkIJTheme");
-                    break;
-                case "Solarized Dark":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatSolarizedDarkIJTheme");
-                    break;
-                case "Solarized Light":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatSolarizedLightIJTheme");
-                    break;
-                case "Spacegray":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatSpacegrayIJTheme");
-                    break;
-                case "Vuesion":
-                    UIManager.setLookAndFeel("com.formdev.flatlaf.intellijthemes.FlatVuesionIJTheme");
-                    break;
-
-                default:
-                    FlatDarkLaf.setup();
-            }
+            applier.apply();
         } catch (Exception e) {
             // Fallback to dark theme if the selected theme is not available
             System.err.println("Failed to apply theme '" + themeName + "': " + e.getMessage());

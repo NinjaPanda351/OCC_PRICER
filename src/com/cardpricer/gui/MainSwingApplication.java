@@ -3,6 +3,7 @@ package com.cardpricer.gui;
 import com.cardpricer.gui.panel.BulkPricerPanel;
 import com.cardpricer.gui.panel.FileManagerPanel;
 import com.cardpricer.gui.panel.InventoryPanel;
+import com.cardpricer.gui.panel.ManagedPanel;
 import com.cardpricer.gui.panel.PreferencesPanel;
 import com.cardpricer.gui.panel.TradePanel;
 import com.formdev.flatlaf.FlatDarkLaf;
@@ -396,7 +397,19 @@ public class MainSwingApplication {
     }
 
     /**
-     * Unloads inactive panels to free memory, but preserves panels with active work
+     * Unloads inactive panels to free memory, skipping panels that report they are not safe
+     * to unload via the {@link ManagedPanel} interface.
+     *
+     * <ul>
+     *   <li>File Manager — always unloaded when not visible (stateless).</li>
+     *   <li>Bulk Pricer — kept alive while a fetch {@code SwingWorker} is running
+     *       ({@link ManagedPanel#isSafeToUnload()} returns {@code false}).</li>
+     *   <li>Inventory — kept alive while a set is loaded in the table
+     *       ({@link ManagedPanel#isSafeToUnload()} returns {@code false}).</li>
+     *   <li>Trade Panel — never unloaded; user data must never be lost mid-session.</li>
+     * </ul>
+     *
+     * @param activeScreenKey the screen key of the panel the user just navigated to
      */
     private void unloadInactivePanels(String activeScreenKey) {
         // File Manager - always safe to unload (no state to preserve)
@@ -412,11 +425,11 @@ public class MainSwingApplication {
             }
         }
 
-        // Bulk Pricer - only unload if NOT currently processing
+        // Bulk Pricer - only unload if safe (no active fetch worker)
         if (!SCREEN_BULK.equals(activeScreenKey) && bulkPricerPanel != null) {
-            // Check if bulk pricer is currently processing
-            boolean isProcessing = isBulkPricerProcessing();
-            if (!isProcessing) {
+            boolean isSafe = !(bulkPricerPanel instanceof ManagedPanel)
+                    || ((ManagedPanel) bulkPricerPanel).isSafeToUnload();
+            if (isSafe) {
                 Component[] components = contentArea.getComponents();
                 for (int i = 0; i < components.length; i++) {
                     if (i == 1) { // SCREEN_BULK position
@@ -429,13 +442,14 @@ public class MainSwingApplication {
             }
         }
 
-        // Inventory - only unload if no cards loaded
+        // Inventory - only unload if safe (no cards currently loaded)
         if (!SCREEN_INVENTORY.equals(activeScreenKey) && inventoryPanel != null) {
-            boolean hasLoadedCards = isInventoryPanelLoaded();
-            if (!hasLoadedCards) {
+            boolean isSafe = !(inventoryPanel instanceof ManagedPanel)
+                    || ((ManagedPanel) inventoryPanel).isSafeToUnload();
+            if (isSafe) {
                 Component[] components = contentArea.getComponents();
                 for (int i = 0; i < components.length; i++) {
-                    if (i == 4) { // SCREEN_INVENTORY position (now index 4)
+                    if (i == 4) { // SCREEN_INVENTORY position
                         contentArea.remove(components[i]);
                         contentArea.add(new JPanel(), SCREEN_INVENTORY, i);
                         inventoryPanel = null;
@@ -447,56 +461,5 @@ public class MainSwingApplication {
 
         // Trade Panel - NEVER unload (always keep trade data)
         // This ensures user never loses trade work in progress
-    }
-
-    /**
-     * Checks if bulk pricer is currently processing sets
-     */
-    private boolean isBulkPricerProcessing() {
-        if (bulkPricerPanel == null) return false;
-
-        try {
-            // Use reflection to check if worker is running
-            java.lang.reflect.Field[] fields = bulkPricerPanel.getClass().getDeclaredFields();
-            for (java.lang.reflect.Field field : fields) {
-                if (field.getName().contains("worker") || field.getName().contains("Worker")) {
-                    field.setAccessible(true);
-                    Object worker = field.get(bulkPricerPanel);
-                    if (worker instanceof SwingWorker) {
-                        SwingWorker<?, ?> sw = (SwingWorker<?, ?>) worker;
-                        return !sw.isDone();
-                    }
-                }
-            }
-        } catch (Exception e) {
-            // If reflection fails, assume not processing
-        }
-
-        return false;
-    }
-
-    /**
-     * Checks if inventory panel has loaded cards
-     */
-    private boolean isInventoryPanelLoaded() {
-        if (inventoryPanel == null) return false;
-
-        try {
-            // Use reflection to check if cards are loaded
-            java.lang.reflect.Field loadedCardsField = inventoryPanel.getClass().getDeclaredField("loadedCards");
-            loadedCardsField.setAccessible(true);
-            Object loadedCardsObj = loadedCardsField.get(inventoryPanel);
-
-            // Check using reflection methods instead of casting to List<?>
-            if (loadedCardsObj != null) {
-                java.lang.reflect.Method sizeMethod = loadedCardsObj.getClass().getMethod("size");
-                Integer size = (Integer) sizeMethod.invoke(loadedCardsObj);
-                return size != null && size > 0;
-            }
-            return false;
-        } catch (Exception e) {
-            // If reflection fails, assume not loaded (safe to unload)
-            return false;
-        }
     }
 }

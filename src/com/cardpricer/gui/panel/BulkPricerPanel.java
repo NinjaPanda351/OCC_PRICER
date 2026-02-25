@@ -3,6 +3,7 @@ package com.cardpricer.gui.panel;
 import com.cardpricer.model.Card;
 import com.cardpricer.service.CsvExportService;
 import com.cardpricer.service.ScryfallApiService;
+import com.cardpricer.util.CardConstants;
 import com.cardpricer.util.SetList;
 
 import javax.swing.*;
@@ -15,9 +16,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Panel for bulk set price fetching with multi-set selection
+ * Panel for bulk set price fetching with multi-set selection.
+ * Implements {@link ManagedPanel} so that {@code MainSwingApplication} can determine
+ * whether it is safe to unload this panel while a fetch is in progress.
  */
-public class BulkPricerPanel extends JPanel {
+public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
     private final ScryfallApiService apiService;
     private final CsvExportService csvService;
@@ -376,7 +379,7 @@ public class BulkPricerPanel extends JPanel {
 
         // Validate all codes exist in mapping
         List<String> invalid = selectedSets.stream()
-                .filter(code -> SetList.getApiCode(code).equals(code)) // No mapping found
+                .filter(code -> SetList.toScryfallCode(code).equals(code)) // No mapping found
                 .toList();
 
         if (selectedSets.isEmpty()) {
@@ -462,6 +465,15 @@ public class BulkPricerPanel extends JPanel {
     }
 
     /**
+     * Returns {@code true} when no fetch operation is running, meaning the panel
+     * can safely be removed from the component tree without interrupting work.
+     */
+    @Override
+    public boolean isSafeToUnload() {
+        return currentWorker == null || currentWorker.isDone();
+    }
+
+    /**
      * Background worker for fetching multiple sets
      */
     private class BulkFetchWorker extends SwingWorker<Void, String> {
@@ -513,7 +525,7 @@ public class BulkPricerPanel extends JPanel {
                     successCount++;
 
                     if (current < sets.size()) {
-                        Thread.sleep(1000);
+                        Thread.sleep(CardConstants.API_RATE_LIMIT_MS);
                     }
 
                 } catch (Exception e) {

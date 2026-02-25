@@ -19,9 +19,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Panel for updating inventory quantities for cards in a set
+ * Panel for updating inventory quantities for cards in a set.
+ * Implements {@link ManagedPanel} so that {@code MainSwingApplication} can determine
+ * whether it is safe to unload this panel when the user navigates away.
  */
-public class InventoryPanel extends JPanel {
+public class InventoryPanel extends JPanel implements ManagedPanel {
 
     private final ScryfallApiService apiService;
     private static final String DATA_DIRECTORY = "data/inventory";
@@ -241,6 +243,15 @@ public class InventoryPanel extends JPanel {
         panel.add(buttonPanel, BorderLayout.EAST);
 
         return panel;
+    }
+
+    /**
+     * Returns {@code true} when no set cards are currently loaded, meaning the panel
+     * can safely be removed from the component tree without losing user data.
+     */
+    @Override
+    public boolean isSafeToUnload() {
+        return loadedCards == null || loadedCards.isEmpty();
     }
 
     private void loadSet() {

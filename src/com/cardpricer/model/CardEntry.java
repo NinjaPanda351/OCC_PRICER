@@ -1,5 +1,7 @@
 package com.cardpricer.model;
 
+import com.cardpricer.service.PricingService;
+
 import java.math.BigDecimal;
 
 /**
@@ -85,52 +87,13 @@ public class CardEntry {
     }
 
     /**
-     * Returns rounded price according to business rules:
+     * Returns the rounded price according to business rules delegated to {@link PricingService}.
      *
-     * Minimums by rarity:
-     * - Rare/Mythic: $0.50
-     * - Uncommon: $0.25
-     * - Common: $0.10
-     *
-     * Rounding rules:
-     * - Below $10: Round to nearest $0.50
-     * - $10 and above: Round to nearest $1.00
+     * <p>Minimums by rarity: Rare/Mythic $0.50 · Uncommon $0.25 · Common $0.10.
+     * <p>Rounding: below $10 round to nearest $0.50; $10 and above round to nearest $1.00.
      */
     public BigDecimal getRoundedPrice() {
-        // Apply minimums based on rarity
-        BigDecimal minimum = getMinimumByRarity();
-        BigDecimal priceToRound = myPrice.max(minimum); // Use max of price and minimum
-
-        if (priceToRound.compareTo(BigDecimal.TEN) < 0) {
-            // Below $10 - round to nearest $0.50
-            BigDecimal rounded = priceToRound.divide(new BigDecimal("0.5"), 0, java.math.RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("0.5"));
-            // Ensure we don't go below minimum after rounding
-            return rounded.max(minimum);
-        } else {
-            // $10 and above - round to nearest $1.00
-            return priceToRound.setScale(0, java.math.RoundingMode.HALF_UP);
-        }
-    }
-
-    /**
-     * Returns the minimum price based on card rarity
-     */
-    private BigDecimal getMinimumByRarity() {
-        if (myRarity == null) {
-            return new BigDecimal("0.10"); // Default to common minimum
-        }
-
-        String rarityLower = myRarity.toLowerCase();
-
-        if (rarityLower.equals("rare") || rarityLower.equals("mythic")) {
-            return new BigDecimal("0.50");
-        } else if (rarityLower.equals("uncommon")) {
-            return new BigDecimal("0.25");
-        } else {
-            // Common and everything else
-            return new BigDecimal("0.10");
-        }
+        return new PricingService().applyPricingRules(myPrice, myRarity);
     }
 
     /**
