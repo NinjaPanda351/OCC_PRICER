@@ -276,28 +276,13 @@ public class TradeReceivingExportService {
             writer.println("\n" + "=".repeat(78));
             writer.println("CARD LIST");
             writer.println("=".repeat(78));
-            writer.printf("%-15s %-34s %-10s %-8s %-5s %-10s%n",
-                    "Code", "Card Name", "Unit Price", "Condition", "Qty", "Total");
+            writer.printf("%-50s %-10s %-8s %-5s %-10s%n",
+                    "Card Name", "Unit Price", "Condition", "Qty", "Total");
             writer.println("-".repeat(78));
 
             for (int i = 0; i < items.size(); i++) {
                 TradeItem item = items.get(i);
                 Card card = item.getCard();
-
-                StringBuilder codeBuilder = new StringBuilder();
-                codeBuilder.append(card.getSetCode())
-                        .append(" ")
-                        .append(card.getCollectorNumber());
-                if (item.isFoil()) {
-                    String finType = item.getFinishType();
-                    if ("E".equals(finType)) {
-                        codeBuilder.append("e");
-                    } else if ("S".equals(finType)) {
-                        codeBuilder.append("s");
-                    } else {
-                        codeBuilder.append("f");
-                    }
-                }
 
                 StringBuilder nameBuilder = new StringBuilder();
                 nameBuilder.append(card.getName());
@@ -313,9 +298,8 @@ public class TradeReceivingExportService {
                 BigDecimal unitPrice = unitPrices.get(i);
                 BigDecimal rowTotal = unitPrice.multiply(BigDecimal.valueOf(qty));
 
-                writer.printf("%-15s %-34s $%-9.2f %-8s %-5d $%-9.2f%n",
-                        codeBuilder.toString(),
-                        truncate(nameBuilder.toString(), 34),
+                writer.printf("%-50s $%-9.2f %-8s %-5d $%-9.2f%n",
+                        truncate(nameBuilder.toString(), 50),
                         unitPrice,
                         condition,
                         qty,

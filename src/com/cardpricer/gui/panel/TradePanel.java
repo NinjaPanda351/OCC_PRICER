@@ -1,6 +1,7 @@
 package com.cardpricer.gui.panel;
 
 import com.cardpricer.gui.CardImagePopup;
+import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.gui.dialog.CardSearchDialog;
 import com.cardpricer.gui.panel.trade.PaymentTypePanel;
 import com.cardpricer.gui.panel.trade.TradeSummaryPanel;
@@ -8,6 +9,7 @@ import com.cardpricer.model.Card;
 import com.cardpricer.model.ParsedCode;
 import com.cardpricer.model.TradeItem;
 import com.cardpricer.service.PricingService;
+import com.cardpricer.service.ReceiptPrintService;
 import com.cardpricer.service.ScryfallApiService;
 import com.cardpricer.service.TradeReceivingExportService;
 import com.cardpricer.util.CardCodeParser;
@@ -15,6 +17,8 @@ import com.cardpricer.util.CardConstants;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.ActionEvent;
@@ -26,6 +30,8 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -71,6 +77,17 @@ public class TradePanel extends JPanel {
     /** Lazy-initialized hover image popup. */
     private CardImagePopup imagePopup;
 
+    // ── Feature: Print / PDF ─────────────────────────────────────────────────
+    /** Full path to the last .txt file saved by saveList() — enables Print/PDF buttons. */
+    private String lastSavedTxtPath = null;
+    private JButton printReceiptBtn;
+    private JButton savePdfBtn;
+
+    // ── Feature: Undo ────────────────────────────────────────────────────────
+    private TradeItem lastAddedItem = null;
+    private int lastAddedRow = -1;
+    private JButton undoBtn;
+
     /**
      * Comparator for price columns that parses {@code "$1.23"}-style strings into
      * {@link BigDecimal} values for numeric ordering. Falls back to lexicographic
@@ -110,6 +127,24 @@ public class TradePanel extends JPanel {
             @Override
             public void actionPerformed(ActionEvent e) {
                 duplicateSelectedCard();
+            }
+        });
+
+        // Ctrl+Z → undo last added card
+        panelIM.put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, InputEvent.CTRL_DOWN_MASK), "globalUndo");
+        panelAM.put("globalUndo", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                undoLastCard();
+            }
+        });
+
+        // F1 → shortcut help dialog
+        panelIM.put(KeyStroke.getKeyStroke(KeyEvent.VK_F1, 0), "showHelp");
+        panelAM.put("showHelp", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(TradePanel.this));
             }
         });
 
@@ -557,6 +592,7 @@ public class TradePanel extends JPanel {
                     receivedCards.remove(modelRow);
                     cardConditions.remove(modelRow);
                     tableModel.removeRow(modelRow);
+                    clearUndoState();
                     refreshSummary();
                 }
             }
@@ -664,34 +700,72 @@ public class TradePanel extends JPanel {
     private JPanel createBottomPanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
-        // Left: Action buttons in 2x2 grid with modern styling
-        JPanel buttonPanel = new JPanel(new GridLayout(2, 2, 10, 8));
-
+        // ── Row 1: Search | Clear | Undo ──────────────────────────────────────
         JButton searchBtn = new JButton("Search by Name (Ctrl+F)");
-        JButton clearBtn = new JButton("Clear All");
-        JButton exportInventoryBtn = new JButton("Export to POS (CSV)");
-        JButton saveListBtn = new JButton("Save Card List");
+        JButton clearBtn  = new JButton("Clear All");
+        undoBtn = new JButton("Undo (Ctrl+Z)");
+        undoBtn.setEnabled(false);
 
-        // Modern flat button styling
-        for (JButton btn : new JButton[]{searchBtn, clearBtn, exportInventoryBtn, saveListBtn}) {
+        // ── Row 2: Export POS | Save List | Print Receipt | Save as PDF ───────
+        JButton exportInventoryBtn = new JButton("Export to POS (CSV)");
+        JButton saveListBtn        = new JButton("Save Card List");
+        printReceiptBtn = new JButton("Print Receipt");
+        savePdfBtn      = new JButton("Save as PDF");
+        printReceiptBtn.setEnabled(false);
+        savePdfBtn.setEnabled(false);
+
+        // Apply consistent sizing
+        for (JButton btn : new JButton[]{
+                searchBtn, clearBtn, undoBtn,
+                exportInventoryBtn, saveListBtn, printReceiptBtn, savePdfBtn}) {
             btn.setFocusPainted(false);
-            btn.setPreferredSize(new Dimension(180, 36));
+            btn.setPreferredSize(new Dimension(165, 36));
         }
 
         searchBtn.addActionListener(e -> openSearchDialog());
         clearBtn.addActionListener(e -> clearAll());
+        undoBtn.addActionListener(e -> undoLastCard());
         exportInventoryBtn.addActionListener(e -> exportToPOS());
         saveListBtn.addActionListener(e -> saveList());
+        printReceiptBtn.addActionListener(e -> doPrintReceipt());
+        savePdfBtn.addActionListener(e -> doSaveAsPdf());
 
-        buttonPanel.add(searchBtn);
-        buttonPanel.add(clearBtn);
-        buttonPanel.add(exportInventoryBtn);
-        buttonPanel.add(saveListBtn);
+        JPanel row1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        row1.add(searchBtn);
+        row1.add(clearBtn);
+        row1.add(undoBtn);
 
-        panel.add(buttonPanel, BorderLayout.WEST);
+        JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        row2.add(exportInventoryBtn);
+        row2.add(saveListBtn);
+        row2.add(printReceiptBtn);
+        row2.add(savePdfBtn);
 
-        // Right: Summary (owned by TradeSummaryPanel)
-        panel.add(summaryPanel, BorderLayout.EAST);
+        JPanel buttonArea = new JPanel();
+        buttonArea.setLayout(new BoxLayout(buttonArea, BoxLayout.Y_AXIS));
+        buttonArea.add(row1);
+        buttonArea.add(Box.createVerticalStrut(8));
+        buttonArea.add(row2);
+
+        panel.add(buttonArea, BorderLayout.WEST);
+
+        // ── Right: [?] help button + summary ──────────────────────────────────
+        JButton helpBtn = new JButton("?");
+        helpBtn.setFocusPainted(false);
+        helpBtn.setPreferredSize(new Dimension(34, 34));
+        helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
+        helpBtn.setToolTipText("Keyboard Shortcuts (F1)");
+        helpBtn.addActionListener(e ->
+                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(this)));
+
+        JPanel helpRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        helpRow.add(helpBtn);
+
+        JPanel rightPanel = new JPanel(new BorderLayout(4, 4));
+        rightPanel.add(helpRow, BorderLayout.NORTH);
+        rightPanel.add(summaryPanel, BorderLayout.CENTER);
+
+        panel.add(rightPanel, BorderLayout.EAST);
 
         // Highlight the initial payment rate
         summaryPanel.update(BigDecimal.ZERO, 0, paymentTypePanel.getPaymentType());
@@ -1313,6 +1387,11 @@ public class TradePanel extends JPanel {
 
         refreshSummary();
 
+        // Track undo state for the card just added
+        lastAddedItem = item;
+        lastAddedRow  = tableModel.getRowCount() - 1;
+        if (undoBtn != null) undoBtn.setEnabled(true);
+
         // Auto-highlight and scroll to the newly added row
         int lastRow = cardTable.getRowCount() - 1;
         cardTable.setRowSelectionInterval(lastRow, lastRow);
@@ -1323,6 +1402,29 @@ public class TradePanel extends JPanel {
         cardCodeField.requestFocusInWindow();
     }
 
+    /** Removes the most recently added card. Single-level undo. */
+    private void undoLastCard() {
+        if (lastAddedItem == null) {
+            JOptionPane.showMessageDialog(getParentWindow(),
+                    "Nothing to undo.", "Undo", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        int row = lastAddedRow;
+        if (row >= 0 && row < tableModel.getRowCount()) {
+            receivedCards.remove(row);
+            cardConditions.remove(row);
+            tableModel.removeRow(row);
+        }
+        clearUndoState();
+        refreshSummary();
+    }
+
+    private void clearUndoState() {
+        lastAddedItem = null;
+        lastAddedRow  = -1;
+        if (undoBtn != null) undoBtn.setEnabled(false);
+    }
+
     private void removeSelected() {
         int row = cardTable.getSelectedRow();
         if (row >= 0) {
@@ -1331,6 +1433,7 @@ public class TradePanel extends JPanel {
             receivedCards.remove(modelRow);
             cardConditions.remove(modelRow);
             tableModel.removeRow(modelRow);
+            clearUndoState();
             refreshSummary();
         }
     }
@@ -1432,6 +1535,7 @@ public class TradePanel extends JPanel {
                 cardConditions.remove(row);
                 tableModel.removeRow(row);
             }
+            clearUndoState();
             refreshSummary();
         }
     }
@@ -1527,6 +1631,10 @@ public class TradePanel extends JPanel {
             receivedCards.clear();
             cardConditions.clear();
             tableModel.setRowCount(0);
+            clearUndoState();
+            lastSavedTxtPath = null;
+            if (printReceiptBtn != null) printReceiptBtn.setEnabled(false);
+            if (savePdfBtn != null) savePdfBtn.setEnabled(false);
             refreshSummary();
             cardCodeField.requestFocusInWindow();
         }
@@ -1540,6 +1648,8 @@ public class TradePanel extends JPanel {
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
+
+        if (!confirmProceedWithoutNames()) return;
 
         String traderName = traderNameField.getText().trim();
         if (traderName.isEmpty()) {
@@ -1690,6 +1800,8 @@ public class TradePanel extends JPanel {
             return;
         }
 
+        if (!confirmProceedWithoutNames()) return;
+
         String traderName = traderNameField.getText().trim();
         String customerName = customerNameField.getText().trim();
         String driversLicense = driversLicenseField.getText().trim();
@@ -1742,6 +1854,11 @@ public class TradePanel extends JPanel {
                     unitPrices,
                     quantities
             );
+
+            // Remember path so Print/PDF buttons can read it
+            lastSavedTxtPath = filename;
+            if (printReceiptBtn != null) printReceiptBtn.setEnabled(true);
+            if (savePdfBtn != null) savePdfBtn.setEnabled(true);
 
             JOptionPane.showMessageDialog(getParentWindow(),
                     String.format("Card list saved!\n\nFile: %s", filename),
@@ -1901,5 +2018,79 @@ public class TradePanel extends JPanel {
             imagePopup = new CardImagePopup(SwingUtilities.getWindowAncestor(this));
         }
         return imagePopup;
+    }
+
+    // -------------------------------------------------------------------------
+    // Feature: Print Receipt / Save as PDF
+    // -------------------------------------------------------------------------
+
+    private void doPrintReceipt() {
+        if (lastSavedTxtPath == null) return;
+        try {
+            String content = Files.readString(Path.of(lastSavedTxtPath));
+            ReceiptPrintService.printReceipt(this, content);
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(getParentWindow(),
+                    "Could not read receipt file: " + e.getMessage(),
+                    "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void doSaveAsPdf() {
+        if (lastSavedTxtPath == null) return;
+        try {
+            String content = Files.readString(Path.of(lastSavedTxtPath));
+            String pdfPath = lastSavedTxtPath.replace(".txt", ".pdf");
+            ReceiptPrintService.saveAsPdf(this, content, pdfPath);
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(getParentWindow(),
+                    "Could not read receipt file: " + e.getMessage(),
+                    "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Feature: Warn on missing customer/trader name
+    // -------------------------------------------------------------------------
+
+    /**
+     * Checks whether customer and trader name fields are filled.
+     * If either is blank, shows a YES/NO warning dialog.
+     * Choosing NO highlights the empty field(s) with an orange border and returns false.
+     *
+     * @return {@code true} if the caller should proceed; {@code false} to abort.
+     */
+    private boolean confirmProceedWithoutNames() {
+        List<String> missing = new ArrayList<>();
+        if (customerNameField.getText().isBlank()) missing.add("Customer Name");
+        if (traderNameField.getText().isBlank())   missing.add("Trader Name");
+        if (missing.isEmpty()) return true;
+
+        int result = JOptionPane.showConfirmDialog(this,
+                "The following fields are empty: " + String.join(", ", missing)
+                + "\n\nProceed anyway?",
+                "Missing Information",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE);
+
+        if (result == JOptionPane.YES_OPTION) return true;
+
+        // Highlight the empty fields so the user knows what to fill in
+        if (customerNameField.getText().isBlank()) highlightEmptyField(customerNameField);
+        if (traderNameField.getText().isBlank())   highlightEmptyField(traderNameField);
+        return false;
+    }
+
+    /** Draws an orange border on {@code field} and auto-removes it when the user types. */
+    private void highlightEmptyField(JTextField field) {
+        javax.swing.border.Border original = field.getBorder();
+        field.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(255, 140, 0), 2),
+                new EmptyBorder(2, 4, 2, 4)));
+        field.getDocument().addDocumentListener(new DocumentListener() {
+            @Override public void insertUpdate(DocumentEvent e)  { field.setBorder(original); }
+            @Override public void removeUpdate(DocumentEvent e)  { field.setBorder(original); }
+            @Override public void changedUpdate(DocumentEvent e) {}
+        });
     }
 }

@@ -1,6 +1,8 @@
 package com.cardpricer.gui.panel;
 
-import com.cardpricer.gui.panel.PreferencesPanel;
+import com.cardpricer.model.TradeRecord;
+import com.cardpricer.service.ReceiptPrintService;
+import com.cardpricer.service.TradeHistoryService;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -8,10 +10,13 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.text.SimpleDateFormat;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -33,6 +38,17 @@ public class FileManagerPanel extends JPanel {
     private DefaultTableModel sharedTableModel;
     private JLabel sharedStatusLabel;
 
+    // History tab
+    private JTable historyTable;
+    private DefaultTableModel historyTableModel;
+    private JTextArea historyPreviewArea;
+    private JTextField historySearchField;
+    private JLabel historyStatusLabel;
+    private List<TradeRecord> allRecords = new ArrayList<>();
+
+    private static final DateTimeFormatter HISTORY_DATE_FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+
     private static final String[] CATEGORIES = {
             "All Files",
             "Trades",
@@ -50,9 +66,12 @@ public class FileManagerPanel extends JPanel {
         JTabbedPane tabs = new JTabbedPane();
         tabs.addTab("Local Files",  createLocalTab());
         tabs.addTab("Shared Files", createSharedTab());
-        // Refresh shared file list whenever the tab is selected
+        tabs.addTab("History",      createHistoryTab());
+
         tabs.addChangeListener(e -> {
-            if (tabs.getSelectedIndex() == 1) refreshSharedFileList();
+            int idx = tabs.getSelectedIndex();
+            if (idx == 1) refreshSharedFileList();
+            if (idx == 2) refreshHistoryList();
         });
         add(tabs, BorderLayout.CENTER);
 
@@ -381,6 +400,205 @@ public class FileManagerPanel extends JPanel {
         if (bytes < 1024) return bytes + " B";
         if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
         return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
+    }
+
+    // ── History Tab ───────────────────────────────────────────────────────────
+
+    private JPanel createHistoryTab() {
+        JPanel tab = new JPanel(new BorderLayout(8, 8));
+        tab.setBorder(new EmptyBorder(6, 0, 0, 0));
+
+        // ── Top: filter row ──────────────────────────────────────────────────
+        JPanel filterRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 4));
+        filterRow.add(new JLabel("Filter by customer:"));
+        historySearchField = new JTextField(20);
+        historySearchField.getDocument().addDocumentListener(
+                new javax.swing.event.DocumentListener() {
+                    public void insertUpdate(javax.swing.event.DocumentEvent e) { applyHistoryFilter(); }
+                    public void removeUpdate(javax.swing.event.DocumentEvent e) { applyHistoryFilter(); }
+                    public void changedUpdate(javax.swing.event.DocumentEvent e) {}
+                });
+        filterRow.add(historySearchField);
+
+        JButton refreshBtn = new JButton("Refresh");
+        refreshBtn.setFocusPainted(false);
+        refreshBtn.addActionListener(e -> refreshHistoryList());
+        filterRow.add(refreshBtn);
+
+        historyStatusLabel = new JLabel("Loading…");
+        historyStatusLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+        filterRow.add(historyStatusLabel);
+
+        tab.add(filterRow, BorderLayout.NORTH);
+
+        // ── Left pane: trade list ────────────────────────────────────────────
+        String[] cols = {"Date", "Customer", "Payment Type", "Total Value", "# Cards"};
+        historyTableModel = new DefaultTableModel(cols, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        };
+        historyTable = new JTable(historyTableModel);
+        historyTable.setFont(historyTable.getFont().deriveFont(13f));
+        historyTable.setRowHeight(26);
+        historyTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        historyTable.setAutoCreateRowSorter(true);
+        historyTable.getColumnModel().getColumn(0).setPreferredWidth(130);
+        historyTable.getColumnModel().getColumn(1).setPreferredWidth(140);
+        historyTable.getColumnModel().getColumn(2).setPreferredWidth(170);
+        historyTable.getColumnModel().getColumn(3).setPreferredWidth(90);
+        historyTable.getColumnModel().getColumn(4).setPreferredWidth(60);
+
+        // When a row is selected, load the file into the preview pane
+        historyTable.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) loadHistoryPreview();
+        });
+
+        JScrollPane listScroll = new JScrollPane(historyTable);
+        listScroll.setBorder(BorderFactory.createTitledBorder("Trade Receipts"));
+
+        // ── Right pane: preview ──────────────────────────────────────────────
+        historyPreviewArea = new JTextArea();
+        historyPreviewArea.setEditable(false);
+        historyPreviewArea.setFont(new Font("Monospaced", Font.PLAIN, 11));
+        historyPreviewArea.setLineWrap(false);
+        JScrollPane previewScroll = new JScrollPane(historyPreviewArea);
+        previewScroll.setBorder(BorderFactory.createTitledBorder("Receipt Preview"));
+
+        // Action buttons below preview
+        JButton histPrintBtn = new JButton("Print");
+        histPrintBtn.setFocusPainted(false);
+        histPrintBtn.setPreferredSize(new Dimension(100, 32));
+        histPrintBtn.addActionListener(e -> historyPrint());
+
+        JButton histPdfBtn = new JButton("Save as PDF");
+        histPdfBtn.setFocusPainted(false);
+        histPdfBtn.setPreferredSize(new Dimension(120, 32));
+        histPdfBtn.addActionListener(e -> historySaveAsPdf());
+
+        JButton histOpenBtn = new JButton("Open in Explorer");
+        histOpenBtn.setFocusPainted(false);
+        histOpenBtn.setPreferredSize(new Dimension(140, 32));
+        histOpenBtn.addActionListener(e -> historyOpenInExplorer());
+
+        JPanel previewBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 4));
+        previewBtns.add(histPrintBtn);
+        previewBtns.add(histPdfBtn);
+        previewBtns.add(histOpenBtn);
+
+        JPanel rightPanel = new JPanel(new BorderLayout());
+        rightPanel.add(previewScroll, BorderLayout.CENTER);
+        rightPanel.add(previewBtns,  BorderLayout.SOUTH);
+
+        // ── Split pane ───────────────────────────────────────────────────────
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, listScroll, rightPanel);
+        split.setDividerLocation(420);
+        split.setResizeWeight(0.45);
+        tab.add(split, BorderLayout.CENTER);
+
+        return tab;
+    }
+
+    private void refreshHistoryList() {
+        allRecords = TradeHistoryService.loadAll("data/trades");
+        historyTableModel.setRowCount(0);
+        applyHistoryFilter();
+    }
+
+    private void applyHistoryFilter() {
+        String filter = historySearchField == null ? "" : historySearchField.getText().trim().toLowerCase();
+        historyTableModel.setRowCount(0);
+        int shown = 0;
+        for (TradeRecord r : allRecords) {
+            if (!filter.isEmpty() && !r.customerName.toLowerCase().contains(filter)) continue;
+            historyTableModel.addRow(new Object[]{
+                    r.date.format(HISTORY_DATE_FMT),
+                    r.customerName,
+                    r.paymentMethod,
+                    String.format("$%.2f", r.totalValue),
+                    r.totalCards
+            });
+            shown++;
+        }
+        if (historyStatusLabel != null) {
+            historyStatusLabel.setText(shown + " record(s) found");
+        }
+    }
+
+    /** Returns the TradeRecord for the currently selected history row, or null. */
+    private TradeRecord selectedRecord() {
+        int viewRow = historyTable.getSelectedRow();
+        if (viewRow < 0) return null;
+        int modelRow = historyTable.convertRowIndexToModel(viewRow);
+
+        // Find the matching record in allRecords (accounting for the filter)
+        String dateStr = (String) historyTableModel.getValueAt(modelRow, 0);
+        String customer = (String) historyTableModel.getValueAt(modelRow, 1);
+        for (TradeRecord r : allRecords) {
+            if (r.date.format(HISTORY_DATE_FMT).equals(dateStr)
+                    && r.customerName.equals(customer)) {
+                return r;
+            }
+        }
+        return null;
+    }
+
+    private void loadHistoryPreview() {
+        TradeRecord r = selectedRecord();
+        if (r == null) {
+            historyPreviewArea.setText("");
+            return;
+        }
+        try {
+            String content = Files.readString(Path.of(r.filename), StandardCharsets.UTF_8);
+            historyPreviewArea.setText(content);
+            historyPreviewArea.setCaretPosition(0);
+        } catch (IOException e) {
+            historyPreviewArea.setText("Could not load file: " + e.getMessage());
+        }
+    }
+
+    private void historyPrint() {
+        TradeRecord r = selectedRecord();
+        if (r == null) {
+            JOptionPane.showMessageDialog(this, "Please select a record.", "No Selection", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        try {
+            String content = Files.readString(Path.of(r.filename), StandardCharsets.UTF_8);
+            ReceiptPrintService.printReceipt(this, content);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Could not read file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void historySaveAsPdf() {
+        TradeRecord r = selectedRecord();
+        if (r == null) {
+            JOptionPane.showMessageDialog(this, "Please select a record.", "No Selection", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        try {
+            String content = Files.readString(Path.of(r.filename), StandardCharsets.UTF_8);
+            String pdfPath = r.filename.replace(".txt", ".pdf");
+            ReceiptPrintService.saveAsPdf(this, content, pdfPath);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Could not read file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void historyOpenInExplorer() {
+        TradeRecord r = selectedRecord();
+        if (r == null) {
+            JOptionPane.showMessageDialog(this, "Please select a record.", "No Selection", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        File dir = new File(r.filename).getParentFile();
+        try {
+            if (Desktop.isDesktopSupported()) {
+                Desktop.getDesktop().open(dir);
+            }
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Could not open folder: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private void downloadSelected() {
