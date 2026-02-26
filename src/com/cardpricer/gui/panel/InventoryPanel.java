@@ -26,7 +26,7 @@ import java.util.List;
 public class InventoryPanel extends JPanel implements ManagedPanel {
 
     private final ScryfallApiService apiService;
-    private static final String DATA_DIRECTORY = "data/inventory";
+    private static final String DATA_DIRECTORY = com.cardpricer.util.AppDataDirectory.inventoryPath();
 
     // UI Components
     private JComboBox<String> setComboBox;

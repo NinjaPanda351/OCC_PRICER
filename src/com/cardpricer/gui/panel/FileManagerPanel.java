@@ -248,7 +248,7 @@ public class FileManagerPanel extends JPanel {
         String srcPath = (String) sharedTableModel.getValueAt(row, 4);
         String filename = (String) sharedTableModel.getValueAt(row, 0);
         File src  = new File(srcPath);
-        File localDir = new File("data/trades");
+        File localDir = com.cardpricer.util.AppDataDirectory.trades();
         if (!localDir.exists()) localDir.mkdirs();
         File dest = new File(localDir, filename);
         try {
@@ -344,18 +344,18 @@ public class FileManagerPanel extends JPanel {
 
         // Collect files based on category
         if ("All Files".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory("data/trades"));
-            files.addAll(getFilesFromDirectory("data/prices"));
-            files.addAll(getFilesFromDirectory("data/combined_files"));
-            files.addAll(getFilesFromDirectory("data/inventory"));
+            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.tradesPath()));
+            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.pricesPath()));
+            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.combinedFilesPath()));
+            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.inventoryPath()));
         } else if ("Trades".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory("data/trades"));
+            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.tradesPath()));
         } else if ("Set Pricer".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory("data/prices"));
+            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.pricesPath()));
         } else if ("Inventory".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory("data/inventory"));
+            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.inventoryPath()));
         } else if ("Combined Files".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory("data/combined_files"));
+            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.combinedFilesPath()));
         }
 
         // Populate table
@@ -498,7 +498,7 @@ public class FileManagerPanel extends JPanel {
     }
 
     private void refreshHistoryList() {
-        allRecords = TradeHistoryService.loadAll("data/trades");
+        allRecords = TradeHistoryService.loadAll(com.cardpricer.util.AppDataDirectory.tradesPath());
         historyTableModel.setRowCount(0);
         applyHistoryFilter();
     }

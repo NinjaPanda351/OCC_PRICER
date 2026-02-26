@@ -20,28 +20,8 @@ import java.util.List;
  */
 public class TradeReceivingExportService {
 
-    /**
-     * Resolves the data directory relative to the JAR file location so that
-     * saves always land beside the JAR, regardless of the current working directory.
-     * Falls back to a relative path when running from an IDE (class directory).
-     */
-    private static final String DATA_DIRECTORY = resolveDataDirectory();
-
-    private static String resolveDataDirectory() {
-        try {
-            java.net.URL loc = TradeReceivingExportService.class
-                    .getProtectionDomain().getCodeSource().getLocation();
-            java.io.File base = new java.io.File(loc.toURI());
-            // If it's a JAR file (not a directory), use its parent folder
-            if (!base.isDirectory()) {
-                base = base.getParentFile();
-                return new java.io.File(base, "data" + java.io.File.separator + "trades").getAbsolutePath();
-            }
-        } catch (Exception ignored) {
-            // Fall through — running from IDE or unusual class-path setup
-        }
-        return "data" + java.io.File.separator + "trades";
-    }
+    private static final String DATA_DIRECTORY =
+            com.cardpricer.util.AppDataDirectory.tradesPath();
 
     private final PricingService pricingService = new PricingService();
 

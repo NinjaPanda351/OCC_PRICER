@@ -545,21 +545,8 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
 
         private void createCombinedFiles() throws Exception {
-            java.io.File dataDir = new java.io.File("data");
-
-            if (!dataDir.exists()) {
-                dataDir.mkdir();
-            }
-
-            java.io.File combinedFileDir = new java.io.File("data/combined_files");
-            java.io.File pricesFileDir = new java.io.File("data/prices");
-
-            if (!combinedFileDir.exists()) {
-                combinedFileDir.mkdir(); // FIX: was dataDir.mkdir()
-            }
-            if (!pricesFileDir.exists()) {
-                pricesFileDir.mkdir(); // FIX: was dataDir.mkdir()
-            }
+            java.io.File combinedFileDir = com.cardpricer.util.AppDataDirectory.combinedFiles();
+            java.io.File pricesFileDir   = com.cardpricer.util.AppDataDirectory.prices();
 
             int fileNumber = 0;
             int currentIndex = 0;
@@ -569,7 +556,8 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
                 List<com.cardpricer.model.CardEntry> batch =
                         allCardEntries.subList(currentIndex, endIndex);
 
-                String filename = String.format("data/combined_files/%02d_combined_list.csv", fileNumber);
+                String filename = String.format("%s/%02d_combined_list.csv",
+                        combinedFileDir.getAbsolutePath(), fileNumber);
 
                 try (java.io.PrintWriter writer = new java.io.PrintWriter(
                         new java.io.FileWriter(filename))) {

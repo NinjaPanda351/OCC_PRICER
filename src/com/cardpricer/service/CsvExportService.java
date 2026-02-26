@@ -17,8 +17,8 @@ import java.util.List;
  */
 public class CsvExportService {
 
-    private static final String DATA_DIRECTORY = "data";
-    private static final String PRICES_DIRECTORY = "data/prices";
+    private static final String DATA_DIRECTORY    = com.cardpricer.util.AppDataDirectory.root().getAbsolutePath();
+    private static final String PRICES_DIRECTORY  = com.cardpricer.util.AppDataDirectory.pricesPath();
 
     public enum ExportFormat {
         IMPORT_UTILITY,  // Full format with department, category, artist, rarity, tax
