@@ -70,11 +70,20 @@ public class ScryfallApiService {
      */
     public Card fetchCard(final String theSetCode, final String theCollectorNumber)
             throws ScryfallApiException {
-        String url = String.format("%s/%s/%s",
-                CARD_API, theSetCode.toLowerCase(), theCollectorNumber);
-
-        JSONObject json = makeApiCall(url);
-        return parseCardFromJson(json);
+        try {
+            // Use the multi-arg URI constructor so that any special characters in the
+            // collector number (e.g. ★ for surge foils) are correctly percent-encoded
+            // in the path (★ = U+2605 → %E2%98%85).  toASCIIString() returns the
+            // fully-encoded URL safe to pass to makeApiCall().
+            java.net.URI uri = new java.net.URI(
+                    "https", "api.scryfall.com",
+                    "/cards/" + theSetCode.toLowerCase() + "/" + theCollectorNumber,
+                    null, null);
+            JSONObject json = makeApiCall(uri.toASCIIString());
+            return parseCardFromJson(json);
+        } catch (java.net.URISyntaxException e) {
+            throw new ScryfallApiException("Card URL invalid: " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -137,6 +146,27 @@ public class ScryfallApiService {
     public Card parseCardFromJson(JSONObject json) {
         Card card = new Card();
 
+        // PLST (The List) override: store as the original set, not as "plst"
+        if ("plst".equals(json.getString("set"))) {
+            String plstNum = json.getString("collector_number"); // e.g. "ARB-1"
+            int idx = plstNum.lastIndexOf('-');
+            if (idx > 0) {
+                card.setName(json.getString("name"));
+                card.setSetCode(plstNum.substring(0, idx).toUpperCase());  // "ARB"
+                card.setCollectorNumber(plstNum.substring(idx + 1));       // "1"
+                card.setRarity(json.getString("rarity"));
+                card.setArtist(json.getString("artist"));
+                if (json.has("prices")) {
+                    JSONObject prices = json.getJSONObject("prices");
+                    card.setPrice(!prices.isNull("usd") ? prices.getString("usd") : null);
+                    card.setFoilPrice(!prices.isNull("usd_foil") ? prices.getString("usd_foil") : null);
+                    card.setEtchedPrice(!prices.isNull("usd_etched") ? prices.getString("usd_etched") : null);
+                }
+                extractImageUrl(json, card);
+                return card;
+            }
+        }
+
         String rawCollectorNumber = json.getString("collector_number");
 
         // Remove Scryfall special markers like ★
@@ -153,6 +183,8 @@ public class ScryfallApiService {
         card.setCollectorNumber(cleanedCollectorNumber);
         card.setRarity(json.getString("rarity"));
         card.setArtist(json.getString("artist"));
+
+        extractImageUrl(json, card);
 
         // Handle prices (nested in "prices" object)
         if (json.has("prices")) {
@@ -181,6 +213,30 @@ public class ScryfallApiService {
         }
 
         return card;
+    }
+
+    /**
+     * Extracts the "normal" image URL from a Scryfall card JSON object.
+     * Handles both single-faced cards (image_uris) and double-faced cards (card_faces[0].image_uris).
+     */
+    private void extractImageUrl(JSONObject json, Card card) {
+        if (json.has("image_uris")) {
+            JSONObject imageUris = json.getJSONObject("image_uris");
+            if (imageUris.has("normal")) {
+                card.setImageUrl(imageUris.getString("normal"));
+            }
+        } else if (json.has("card_faces")) {
+            JSONArray faces = json.getJSONArray("card_faces");
+            if (faces.length() > 0) {
+                JSONObject front = faces.getJSONObject(0);
+                if (front.has("image_uris")) {
+                    JSONObject imageUris = front.getJSONObject("image_uris");
+                    if (imageUris.has("normal")) {
+                        card.setImageUrl(imageUris.getString("normal"));
+                    }
+                }
+            }
+        }
     }
 
     /**

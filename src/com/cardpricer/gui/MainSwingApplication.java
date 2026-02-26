@@ -6,6 +6,8 @@ import com.cardpricer.gui.panel.InventoryPanel;
 import com.cardpricer.gui.panel.ManagedPanel;
 import com.cardpricer.gui.panel.PreferencesPanel;
 import com.cardpricer.gui.panel.TradePanel;
+import com.cardpricer.service.UpdateCheckService;
+import com.cardpricer.util.AppVersion;
 import com.formdev.flatlaf.FlatDarkLaf;
 
 import javax.swing.*;
@@ -19,6 +21,9 @@ public class MainSwingApplication {
     private JPanel contentArea;          // will hold screens
     private CardLayout cardLayout;       // screen switching
     private JLabel statusLabel;
+
+    // Update-banner slot (NORTH of root; hidden until update found)
+    private JPanel updateBannerSlot;
 
     // Lazy-loaded panels (only created when first accessed)
     private JPanel bulkPricerPanel;
@@ -52,6 +57,10 @@ public class MainSwingApplication {
         JPanel root = new JPanel(new BorderLayout());
         root.setBorder(new EmptyBorder(0, 0, 0, 0));
 
+        // Update-banner slot (initially empty, populated when update found)
+        updateBannerSlot = new JPanel(new BorderLayout());
+        root.add(updateBannerSlot, BorderLayout.NORTH);
+
         // Sidebar (left)
         root.add(createSidebar(), BorderLayout.WEST);
 
@@ -82,6 +91,13 @@ public class MainSwingApplication {
 
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
+
+        // Kick off background update check (daemon thread — never blocks UI)
+        UpdateCheckService.checkAsync(banner -> {
+            updateBannerSlot.add(banner, BorderLayout.CENTER);
+            updateBannerSlot.revalidate();
+            updateBannerSlot.repaint();
+        });
     }
 
     private JComponent createSidebar() {
@@ -187,7 +203,7 @@ public class MainSwingApplication {
         statusLabel = new JLabel("Ready");
         statusLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
 
-        JLabel version = new JLabel("v1.0.0");
+        JLabel version = new JLabel("v" + AppVersion.CURRENT);
         version.setForeground(UIManager.getColor("Label.disabledForeground"));
 
         status.add(statusLabel, BorderLayout.WEST);

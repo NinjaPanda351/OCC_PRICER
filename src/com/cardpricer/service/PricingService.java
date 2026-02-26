@@ -23,6 +23,8 @@ import java.math.RoundingMode;
  */
 public class PricingService {
 
+    private static final BigDecimal NINE_FIFTY = new BigDecimal("9.50");
+
     /**
      * Returns the minimum buylist price for the given rarity string.
      *
@@ -59,6 +61,7 @@ public class PricingService {
             BigDecimal rounded = priceToRound
                     .divide(CardConstants.ROUNDING_STEP_LOW, 0, RoundingMode.HALF_UP)
                     .multiply(CardConstants.ROUNDING_STEP_LOW);
+            if (rounded.compareTo(NINE_FIFTY) == 0) rounded = BigDecimal.TEN;
             return rounded.max(minimum);
         } else {
             return priceToRound.setScale(0, RoundingMode.HALF_UP);
@@ -79,9 +82,11 @@ public class PricingService {
         BigDecimal adjustedPrice = basePrice.multiply(BigDecimal.valueOf(multiplier));
 
         if (adjustedPrice.compareTo(CardConstants.ROUNDING_THRESHOLD) < 0) {
-            return adjustedPrice
+            BigDecimal rounded = adjustedPrice
                     .divide(CardConstants.ROUNDING_STEP_LOW, 0, RoundingMode.HALF_UP)
                     .multiply(CardConstants.ROUNDING_STEP_LOW);
+            if (rounded.compareTo(NINE_FIFTY) == 0) rounded = BigDecimal.TEN;
+            return rounded;
         } else {
             return adjustedPrice.setScale(0, RoundingMode.HALF_UP);
         }

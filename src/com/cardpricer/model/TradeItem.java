@@ -9,47 +9,29 @@ import java.math.BigDecimal;
 public class TradeItem {
     private Card myCard;
     private boolean myIsFoil;
+    /** Raw finish code: "F" (foil), "E" (etched), "S" (surge foil), or "" (normal). */
+    private String myFinishType;
     private int myQuantity;
     private BigDecimal myUnitPrice;
 
     /**
-     * Creates a TradeItem with quantity of 1
-     * @param theCard The card being traded
-     * @param isFoil Whether this is the foil version
+     * Creates a TradeItem with quantity of 1 and no special finish.
      */
     public TradeItem(final Card theCard, final boolean isFoil) {
-        this(theCard, isFoil, 1);
+        this(theCard, isFoil, 1, isFoil ? "F" : "");
     }
 
     /**
-     * Creates a TradeItem with specified quantity
-     * @param theCard The card being traded
-     * @param isFoil Whether this is the foil version
-     * @param theQuantity How many of this card
+     * Creates a TradeItem with specified quantity and no special finish.
      */
     public TradeItem(final Card theCard, final boolean isFoil, final int theQuantity) {
-        if (theCard == null) {
-            throw new IllegalArgumentException("Card cannot be null");
-        }
-        if (theQuantity < 1) {
-            throw new IllegalArgumentException("Quantity must be at least 1");
-        }
-
-        this.myCard = theCard;
-        this.myIsFoil = isFoil;
-        this.myQuantity = theQuantity;
-
-        // Set unit price based on finish
-        this.myUnitPrice = isFoil ? theCard.getFoilPriceAsBigDecimal() :
-                theCard.getPriceAsBigDecimal();
+        this(theCard, isFoil, theQuantity, isFoil ? "F" : "");
     }
 
     /**
-     * Creates a TradeItem with specified quantity and finish type
-     * @param theCard The card being traded
-     * @param isFoil Whether this is the foil/etched version
-     * @param theQuantity How many of this card
-     * @param finishType "F" for foil, "E" for etched, "" for normal
+     * Creates a TradeItem with specified quantity and finish type.
+     *
+     * @param finishType "F" (foil), "E" (etched), "S" (surge foil), or "" (normal)
      */
     public TradeItem(final Card theCard, final boolean isFoil, final int theQuantity, final String finishType) {
         if (theCard == null) {
@@ -61,10 +43,11 @@ public class TradeItem {
 
         this.myCard = theCard;
         this.myIsFoil = isFoil;
+        this.myFinishType = finishType != null ? finishType : "";
         this.myQuantity = theQuantity;
 
         // Set unit price based on finish type
-        if ("F".equals(finishType)) {
+        if ("F".equals(finishType) || "S".equals(finishType)) {
             this.myUnitPrice = theCard.getFoilPriceAsBigDecimal();
         } else if ("E".equals(finishType)) {
             this.myUnitPrice = theCard.getEtchedPriceAsBigDecimal();
@@ -106,10 +89,22 @@ public class TradeItem {
     }
 
     /**
-     * Returns the finish type as a string
+     * Returns the raw finish code: "F", "E", "S", or "".
+     */
+    public String getFinishType() {
+        return myFinishType;
+    }
+
+    /**
+     * Returns a human-readable finish label.
      */
     public String getFinish() {
-        return myIsFoil ? "Foil" : "Normal";
+        switch (myFinishType) {
+            case "E": return "Etched";
+            case "S": return "Surge Foil";
+            case "F": return "Foil";
+            default:  return "Normal";
+        }
     }
 
     /**

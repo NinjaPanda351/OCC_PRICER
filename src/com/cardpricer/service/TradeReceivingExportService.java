@@ -1,5 +1,6 @@
 package com.cardpricer.service;
 
+import com.cardpricer.gui.panel.PreferencesPanel;
 import com.cardpricer.model.Card;
 import com.cardpricer.model.TradeItem;
 import com.cardpricer.util.CardConstants;
@@ -19,14 +20,66 @@ import java.util.List;
  */
 public class TradeReceivingExportService {
 
-    private static final String DATA_DIRECTORY = "data/trades";
+    /**
+     * Resolves the data directory relative to the JAR file location so that
+     * saves always land beside the JAR, regardless of the current working directory.
+     * Falls back to a relative path when running from an IDE (class directory).
+     */
+    private static final String DATA_DIRECTORY = resolveDataDirectory();
+
+    private static String resolveDataDirectory() {
+        try {
+            java.net.URL loc = TradeReceivingExportService.class
+                    .getProtectionDomain().getCodeSource().getLocation();
+            java.io.File base = new java.io.File(loc.toURI());
+            // If it's a JAR file (not a directory), use its parent folder
+            if (!base.isDirectory()) {
+                base = base.getParentFile();
+                return new java.io.File(base, "data" + java.io.File.separator + "trades").getAbsolutePath();
+            }
+        } catch (Exception ignored) {
+            // Fall through — running from IDE or unusual class-path setup
+        }
+        return "data" + java.io.File.separator + "trades";
+    }
 
     private final PricingService pricingService = new PricingService();
 
     private void ensureDataDirectoryExists() {
         java.io.File dataDir = new java.io.File(DATA_DIRECTORY);
         if (!dataDir.exists()) {
-            dataDir.mkdirs(); // Use mkdirs() to create parent directories too
+            dataDir.mkdirs();
+        }
+    }
+
+    /**
+     * Returns the configured shared-trades folder path, or null if none is set / folder
+     * is not accessible.  Errors are silently swallowed — shared folder is best-effort.
+     */
+    private static java.io.File resolveSharedDirectory() {
+        String path = PreferencesPanel.getSharedTradesFolder();
+        if (path == null || path.isBlank()) return null;
+        java.io.File dir = new java.io.File(path);
+        if (!dir.exists() || !dir.isDirectory()) return null;
+        return dir;
+    }
+
+    /**
+     * Copies {@code localFile} to the shared trades folder (if configured and reachable).
+     * Failures are logged but never propagated.
+     */
+    private static void copyToSharedFolder(String localFilePath) {
+        try {
+            java.io.File sharedDir = resolveSharedDirectory();
+            if (sharedDir == null) return;
+
+            java.io.File src  = new java.io.File(localFilePath);
+            java.io.File dest = new java.io.File(sharedDir, src.getName());
+            java.nio.file.Files.copy(src.toPath(), dest.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            System.out.println("Copied to shared folder: " + dest.getAbsolutePath());
+        } catch (Exception e) {
+            System.err.println("[SharedFolder] Failed to copy file: " + e.getMessage());
         }
     }
 
@@ -132,25 +185,29 @@ public class TradeReceivingExportService {
         }
 
         System.out.println("POS import file created: " + filename);
+        copyToSharedFolder(filename);
         return filename;
     }
 
     /**
      * Saves a human-readable card list for record keeping using table values.
      *
-     * @param items          list of received cards
-     * @param traderName     name of the trader/source
-     * @param customerName   name of the customer
-     * @param driversLicense driver's license number
-     * @param checkNumber    check number (if applicable)
-     * @param isStoreCredit  {@code true} for store credit (50%), {@code false} for check (33%)
-     * @param conditions     list of condition strings for each card
-     * @param unitPrices     actual unit prices from the table (already condition-adjusted)
-     * @param quantities     actual quantities from the table
+     * @param items                list of received cards
+     * @param traderName           name of the trader/source
+     * @param customerName         name of the customer
+     * @param driversLicense       driver's license number
+     * @param checkNumber          check number (if applicable)
+     * @param paymentType          "credit", "check", "partial", or "inventory"
+     * @param partialCreditAmount  store-credit payout for partial trades (ignored otherwise)
+     * @param partialCheckAmount   check payout for partial trades (ignored otherwise)
+     * @param conditions           list of condition strings for each card
+     * @param unitPrices           actual unit prices from the table (already condition-adjusted)
+     * @param quantities           actual quantities from the table
      * @return the filename of the saved list
      */
     public String saveCardList(List<TradeItem> items, String traderName, String customerName,
-                               String driversLicense, String checkNumber, boolean isStoreCredit,
+                               String driversLicense, String checkNumber, String paymentType,
+                               BigDecimal partialCreditAmount, BigDecimal partialCheckAmount,
                                List<String> conditions, List<BigDecimal> unitPrices, List<Integer> quantities) throws IOException {
         ensureDataDirectoryExists();
 
@@ -170,10 +227,6 @@ public class TradeReceivingExportService {
             writer.println("Customer Name: " + customerName);
             writer.println("Trader Name: " + (traderName != null && !traderName.isEmpty() ? traderName : "N/A"));
             writer.println("Driver's License: " + (driversLicense != null && !driversLicense.isEmpty() ? driversLicense : "N/A"));
-            writer.println("Payment Method: " + (isStoreCredit ? "Store Credit (50%)" : "Check (33%)"));
-            if (!isStoreCredit && checkNumber != null && !checkNumber.isEmpty()) {
-                writer.println("Check Number: " + checkNumber);
-            }
             writer.println("Date: " + LocalDateTime.now().format(
                     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")));
 
@@ -188,17 +241,44 @@ public class TradeReceivingExportService {
             }
 
             writer.printf("Total Value: $%.2f%n", totalValue);
-            writer.printf("Half Rate (50%%): $%.2f%n",
-                    totalValue.multiply(CardConstants.PAYMENT_RATE_CREDIT));
-            writer.printf("Third Rate (33%%): $%.2f%n",
-                    totalValue.multiply(CardConstants.PAYMENT_RATE_CHECK));
 
-            writer.println("\n" + "=".repeat(70));
+            // Payment method and payout breakdown
+            switch (paymentType) {
+                case "partial":
+                    BigDecimal safeCreditAmt = partialCreditAmount != null ? partialCreditAmount : BigDecimal.ZERO;
+                    BigDecimal safeCheckAmt  = partialCheckAmount  != null ? partialCheckAmount  : BigDecimal.ZERO;
+                    writer.println("Payment Method: Partial (Split)");
+                    writer.printf("  Store Credit Payout : $%.2f%n", safeCreditAmt);
+                    writer.printf("  Check Payout        : $%.2f%n", safeCheckAmt);
+                    writer.printf("  Total Payout        : $%.2f%n", safeCreditAmt.add(safeCheckAmt));
+                    if (checkNumber != null && !checkNumber.isEmpty()) {
+                        writer.println("  Check Number        : " + checkNumber);
+                    }
+                    break;
+                case "check":
+                    writer.println("Payment Method: Check (33.33%)");
+                    writer.printf("Payout: $%.2f%n",
+                            totalValue.multiply(CardConstants.PAYMENT_RATE_CHECK).setScale(2, java.math.RoundingMode.HALF_UP));
+                    if (checkNumber != null && !checkNumber.isEmpty()) {
+                        writer.println("Check Number: " + checkNumber);
+                    }
+                    break;
+                case "inventory":
+                    writer.println("Payment Method: Inventory (No Payout)");
+                    break;
+                default: // "credit"
+                    writer.println("Payment Method: Store Credit (50%)");
+                    writer.printf("Payout: $%.2f%n",
+                            totalValue.multiply(CardConstants.PAYMENT_RATE_CREDIT).setScale(2, java.math.RoundingMode.HALF_UP));
+                    break;
+            }
+
+            writer.println("\n" + "=".repeat(78));
             writer.println("CARD LIST");
-            writer.println("=".repeat(70));
-            writer.printf("%-15s %-30s %-8s %-5s %-10s %-10s%n",
-                    "Code", "Card Name", "Condition", "Qty", "Unit", "Total");
-            writer.println("-".repeat(70));
+            writer.println("=".repeat(78));
+            writer.printf("%-15s %-34s %-10s %-8s %-5s %-10s%n",
+                    "Code", "Card Name", "Unit Price", "Condition", "Qty", "Total");
+            writer.println("-".repeat(78));
 
             for (int i = 0; i < items.size(); i++) {
                 TradeItem item = items.get(i);
@@ -209,7 +289,14 @@ public class TradeReceivingExportService {
                         .append(" ")
                         .append(card.getCollectorNumber());
                 if (item.isFoil()) {
-                    codeBuilder.append("F");
+                    String finType = item.getFinishType();
+                    if ("E".equals(finType)) {
+                        codeBuilder.append("e");
+                    } else if ("S".equals(finType)) {
+                        codeBuilder.append("s");
+                    } else {
+                        codeBuilder.append("f");
+                    }
                 }
 
                 StringBuilder nameBuilder = new StringBuilder();
@@ -218,7 +305,7 @@ public class TradeReceivingExportService {
                     nameBuilder.append(" - ").append(card.getFrameEffects());
                 }
                 if (item.isFoil()) {
-                    nameBuilder.append(" (Foil)");
+                    nameBuilder.append(" (").append(item.getFinish()).append(")");
                 }
 
                 String condition = (conditions != null && i < conditions.size()) ? conditions.get(i) : "NM";
@@ -226,19 +313,20 @@ public class TradeReceivingExportService {
                 BigDecimal unitPrice = unitPrices.get(i);
                 BigDecimal rowTotal = unitPrice.multiply(BigDecimal.valueOf(qty));
 
-                writer.printf("%-15s %-30s %-8s %-5d $%-9.2f $%-9.2f%n",
+                writer.printf("%-15s %-34s $%-9.2f %-8s %-5d $%-9.2f%n",
                         codeBuilder.toString(),
-                        truncate(nameBuilder.toString(), 30),
+                        truncate(nameBuilder.toString(), 34),
+                        unitPrice,
                         condition,
                         qty,
-                        unitPrice,
                         rowTotal);
             }
 
-            writer.println("-".repeat(70));
+            writer.println("-".repeat(78));
         }
 
         System.out.println("Card list saved: " + filename);
+        copyToSharedFolder(filename);
         return filename;
     }
 

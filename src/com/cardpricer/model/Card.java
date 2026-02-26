@@ -14,6 +14,7 @@ public class Card {
     private String myEtchedPrice;
     private List<String> myFrameEffects;
     private String myArtist;
+    private String myImageUrl;
 
     // Default constructor
     public Card() {
@@ -165,6 +166,14 @@ public class Card {
 
     public void setArtist(final String theArtist) {
         this.myArtist = theArtist != null ? theArtist.trim() : null;
+    }
+
+    public String getImageUrl() {
+        return myImageUrl;
+    }
+
+    public void setImageUrl(String url) {
+        myImageUrl = url;
     }
 
     // Helper methods

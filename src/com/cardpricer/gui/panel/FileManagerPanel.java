@@ -1,5 +1,7 @@
 package com.cardpricer.gui.panel;
 
+import com.cardpricer.gui.panel.PreferencesPanel;
+
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
@@ -20,10 +22,16 @@ import java.util.List;
  */
 public class FileManagerPanel extends JPanel {
 
+    // Local files tab
     private JTable fileTable;
     private DefaultTableModel tableModel;
     private JComboBox<String> categoryCombo;
     private JLabel statusLabel;
+
+    // Shared files tab
+    private JTable sharedTable;
+    private DefaultTableModel sharedTableModel;
+    private JLabel sharedStatusLabel;
 
     private static final String[] CATEGORIES = {
             "All Files",
@@ -38,10 +46,17 @@ public class FileManagerPanel extends JPanel {
         setBorder(new EmptyBorder(20, 20, 20, 20));
 
         add(createTopPanel(), BorderLayout.NORTH);
-        add(createTablePanel(), BorderLayout.CENTER);
-        add(createBottomPanel(), BorderLayout.SOUTH);
 
-        // Load files on startup
+        JTabbedPane tabs = new JTabbedPane();
+        tabs.addTab("Local Files",  createLocalTab());
+        tabs.addTab("Shared Files", createSharedTab());
+        // Refresh shared file list whenever the tab is selected
+        tabs.addChangeListener(e -> {
+            if (tabs.getSelectedIndex() == 1) refreshSharedFileList();
+        });
+        add(tabs, BorderLayout.CENTER);
+
+        // Load local files on startup
         refreshFileList();
     }
 
@@ -96,6 +111,140 @@ public class FileManagerPanel extends JPanel {
 
         return panel;
     }
+
+    private JPanel createLocalTab() {
+        JPanel tab = new JPanel(new BorderLayout(10, 10));
+        tab.add(createTablePanel(), BorderLayout.CENTER);
+        tab.add(createBottomPanel(), BorderLayout.SOUTH);
+        return tab;
+    }
+
+    // ── Shared Files Tab ─────────────────────────────────────────────────────
+
+    private JPanel createSharedTab() {
+        JPanel tab = new JPanel(new BorderLayout(10, 10));
+
+        // Header
+        JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
+        sharedStatusLabel = new JLabel("Configure a shared folder in Preferences → Network");
+        sharedStatusLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+        JButton refreshBtn = new JButton("Refresh");
+        refreshBtn.setFocusPainted(false);
+        refreshBtn.addActionListener(e -> refreshSharedFileList());
+        header.add(sharedStatusLabel);
+        header.add(refreshBtn);
+
+        // Table
+        String[] cols = {"Filename", "Type", "Size", "Date Modified", "Path"};
+        sharedTableModel = new DefaultTableModel(cols, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        };
+        sharedTable = new JTable(sharedTableModel);
+        sharedTable.setFont(sharedTable.getFont().deriveFont(14f));
+        sharedTable.setRowHeight(28);
+        sharedTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        sharedTable.setAutoCreateRowSorter(true);
+        sharedTable.getColumnModel().getColumn(0).setPreferredWidth(300);
+        sharedTable.getColumnModel().getColumn(1).setPreferredWidth(80);
+        sharedTable.getColumnModel().getColumn(2).setPreferredWidth(80);
+        sharedTable.getColumnModel().getColumn(3).setPreferredWidth(150);
+        sharedTable.getColumnModel().getColumn(4).setPreferredWidth(250);
+
+        JScrollPane scroll = new JScrollPane(sharedTable);
+        scroll.setBorder(BorderFactory.createTitledBorder("Shared Trades Folder"));
+
+        // Buttons
+        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
+        JButton openBtn = new JButton("Open");
+        openBtn.setFocusPainted(false);
+        openBtn.setPreferredSize(new Dimension(110, 36));
+        openBtn.addActionListener(e -> openSharedFile());
+
+        JButton copyBtn = new JButton("Copy to Local");
+        copyBtn.setFocusPainted(false);
+        copyBtn.setPreferredSize(new Dimension(140, 36));
+        copyBtn.addActionListener(e -> copySharedToLocal());
+
+        btnPanel.add(openBtn);
+        btnPanel.add(copyBtn);
+
+        tab.add(header, BorderLayout.NORTH);
+        tab.add(scroll,  BorderLayout.CENTER);
+        tab.add(btnPanel, BorderLayout.SOUTH);
+        return tab;
+    }
+
+    private void refreshSharedFileList() {
+        sharedTableModel.setRowCount(0);
+        String path = PreferencesPanel.getSharedTradesFolder();
+        if (path == null || path.isBlank()) {
+            sharedStatusLabel.setText("No shared folder configured — go to Preferences → Network");
+            return;
+        }
+        File dir = new File(path);
+        if (!dir.exists() || !dir.isDirectory()) {
+            sharedStatusLabel.setText("Shared folder not accessible: " + path);
+            return;
+        }
+        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        File[] files = dir.listFiles(File::isFile);
+        int count = 0;
+        if (files != null) {
+            for (File f : files) {
+                sharedTableModel.addRow(new Object[]{
+                        f.getName(),
+                        getFileType(f.getName()),
+                        formatFileSize(f.length()),
+                        fmt.format(new Date(f.lastModified())),
+                        f.getAbsolutePath()
+                });
+                count++;
+            }
+        }
+        sharedStatusLabel.setText("Shared folder: " + path + "  (" + count + " file(s))");
+    }
+
+    private void openSharedFile() {
+        int row = sharedTable.getSelectedRow();
+        if (row < 0) {
+            JOptionPane.showMessageDialog(this, "Please select a file.", "No Selection", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String filePath = (String) sharedTableModel.getValueAt(row, 4);
+        try {
+            if (Desktop.isDesktopSupported()) {
+                Desktop.getDesktop().open(new File(filePath));
+            }
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Failed to open file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void copySharedToLocal() {
+        int row = sharedTable.getSelectedRow();
+        if (row < 0) {
+            JOptionPane.showMessageDialog(this, "Please select a file.", "No Selection", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String srcPath = (String) sharedTableModel.getValueAt(row, 4);
+        String filename = (String) sharedTableModel.getValueAt(row, 0);
+        File src  = new File(srcPath);
+        File localDir = new File("data/trades");
+        if (!localDir.exists()) localDir.mkdirs();
+        File dest = new File(localDir, filename);
+        try {
+            Files.copy(src.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            JOptionPane.showMessageDialog(this,
+                    "Copied to local folder:\n" + dest.getAbsolutePath(),
+                    "Copy Complete", JOptionPane.INFORMATION_MESSAGE);
+            refreshFileList(); // refresh local tab
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this,
+                    "Failed to copy file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    // ── Local Files Tab ───────────────────────────────────────────────────────
 
     private JPanel createTablePanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));

@@ -6,6 +6,10 @@ import com.formdev.flatlaf.themes.*;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.prefs.Preferences;
@@ -24,7 +28,8 @@ public class PreferencesPanel extends JPanel {
     }
 
     private static final Preferences prefs = Preferences.userNodeForPackage(PreferencesPanel.class);
-    private static final String THEME_KEY = "app.theme";
+    private static final String THEME_KEY              = "app.theme";
+    static final         String SHARED_FOLDER_KEY      = "shared.trades.folder";
 
     /**
      * Registry mapping theme display names to their application actions.
@@ -79,13 +84,14 @@ public class PreferencesPanel extends JPanel {
 
     private JComboBox<String> themeCombo;
     private JButton applyButton;
+    private JTextField sharedFolderField;
 
     public PreferencesPanel() {
         setLayout(new BorderLayout(15, 15));
         setBorder(new EmptyBorder(20, 20, 20, 20));
 
         add(createTopPanel(), BorderLayout.NORTH);
-        add(createSettingsPanel(), BorderLayout.CENTER);
+        add(createTabbedSettings(), BorderLayout.CENTER);
     }
 
     private JPanel createTopPanel() {
@@ -107,21 +113,136 @@ public class PreferencesPanel extends JPanel {
         return panel;
     }
 
-    private JPanel createSettingsPanel() {
+    private JTabbedPane createTabbedSettings() {
+        JTabbedPane tabs = new JTabbedPane();
+        tabs.addTab("Appearance", createAppearanceTab());
+        tabs.addTab("Network",    createNetworkTab());
+        return tabs;
+    }
+
+    private JPanel createAppearanceTab() {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(new EmptyBorder(15, 10, 10, 10));
 
-        // Theme Settings Section
         JPanel themeSection = createThemeSection();
         themeSection.setAlignmentX(Component.LEFT_ALIGNMENT);
         panel.add(themeSection);
-        panel.add(Box.createVerticalStrut(20));
-
-        // Future sections can be added here
-
         panel.add(Box.createVerticalGlue());
-
         return panel;
+    }
+
+    private JPanel createNetworkTab() {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(new EmptyBorder(15, 10, 10, 10));
+
+        JPanel section = new JPanel(new GridBagLayout());
+        section.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder("Shared Trades Folder"),
+                new EmptyBorder(12, 12, 12, 12)
+        ));
+        section.setMaximumSize(new Dimension(700, 180));
+
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.anchor = GridBagConstraints.WEST;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        // Row 0: label + field + Browse button
+        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0;
+        section.add(new JLabel("Folder path:"), gbc);
+
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        sharedFolderField = new JTextField(prefs.get(SHARED_FOLDER_KEY, ""), 28);
+        sharedFolderField.setToolTipText("e.g. \\\\PC-NAME\\Trades");
+        section.add(sharedFolderField, gbc);
+
+        gbc.gridx = 2; gbc.weightx = 0;
+        JButton browseBtn = new JButton("Browse...");
+        browseBtn.setFocusPainted(false);
+        browseBtn.addActionListener(e -> browseForSharedFolder());
+        section.add(browseBtn, gbc);
+
+        // Row 1: help text
+        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 3; gbc.weightx = 1.0;
+        JLabel helpLabel = new JLabel("<html>Set to a shared network folder (e.g. <code>\\\\PC-NAME\\Trades</code>) so all computers read/write the same trade files.</html>");
+        helpLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+        helpLabel.setFont(helpLabel.getFont().deriveFont(Font.ITALIC, 11f));
+        section.add(helpLabel, gbc);
+
+        // Row 2: Test + Save buttons
+        gbc.gridy = 2; gbc.gridwidth = 3;
+        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        btnRow.setOpaque(false);
+
+        JButton saveBtn = new JButton("Save");
+        saveBtn.setFocusPainted(false);
+        saveBtn.addActionListener(e -> saveSharedFolder());
+
+        JButton testBtn = new JButton("Test Connection");
+        testBtn.setFocusPainted(false);
+        testBtn.addActionListener(e -> testSharedFolder());
+
+        btnRow.add(saveBtn);
+        btnRow.add(testBtn);
+        section.add(btnRow, gbc);
+
+        section.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.add(section);
+        panel.add(Box.createVerticalGlue());
+        return panel;
+    }
+
+    private void browseForSharedFolder() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setDialogTitle("Select Shared Trades Folder");
+        String current = sharedFolderField.getText().trim();
+        if (!current.isEmpty()) {
+            File dir = new File(current);
+            if (dir.exists()) chooser.setCurrentDirectory(dir);
+        }
+        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            sharedFolderField.setText(chooser.getSelectedFile().getAbsolutePath());
+        }
+    }
+
+    private void saveSharedFolder() {
+        String path = sharedFolderField.getText().trim();
+        prefs.put(SHARED_FOLDER_KEY, path);
+        JOptionPane.showMessageDialog(this,
+                "Shared folder saved:\n" + (path.isEmpty() ? "(none)" : path),
+                "Saved", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void testSharedFolder() {
+        String path = sharedFolderField.getText().trim();
+        if (path.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No folder path entered.", "Test", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        File dir = new File(path);
+        if (!dir.exists() || !dir.isDirectory()) {
+            JOptionPane.showMessageDialog(this, "Path does not exist or is not a folder:\n" + path,
+                    "Test Failed", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        // Try writing a temp file to confirm write access
+        try {
+            Path tmp = Files.createTempFile(dir.toPath(), ".occ_test_", ".tmp");
+            Files.delete(tmp);
+            JOptionPane.showMessageDialog(this, "Connection OK — folder is accessible and writable.",
+                    "Test Passed", JOptionPane.INFORMATION_MESSAGE);
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "Folder exists but is not writable:\n" + ex.getMessage(),
+                    "Test Failed", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /** Returns the configured shared trades folder, or null/empty if not set. */
+    public static String getSharedTradesFolder() {
+        return prefs.get(SHARED_FOLDER_KEY, "");
     }
 
     private JPanel createThemeSection() {
