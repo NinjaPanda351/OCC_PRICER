@@ -17,6 +17,10 @@ $AppName    = "OCC Card Pricer"
 $MainClass  = "com.cardpricer.gui.MainSwingApplication"
 $ManifestSrc = Join-Path $SrcDir "META-INF\MANIFEST.MF"
 
+# jpackage requires purely numeric version (major.minor.patch).
+# Strip any pre-release suffix (e.g. "2.0.8-1" → "2.0.8").
+$JpackageVersion = ($Version -split '-')[0]
+
 Write-Host "=== OCC Card Pricer Build Script ===" -ForegroundColor Cyan
 Write-Host "Version : $Version"
 Write-Host "Project : $ProjectDir"
@@ -82,7 +86,7 @@ if (-not (Test-Path $DistDir)) { New-Item -ItemType Directory -Path $DistDir | O
 jpackage `
     --type app-image `
     --name $AppName `
-    --app-version $Version `
+    --app-version $JpackageVersion `
     --input $ProjectDir `
     --main-jar $JarName `
     --main-class $MainClass `
