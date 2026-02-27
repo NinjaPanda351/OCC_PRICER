@@ -1655,6 +1655,10 @@ public class TradePanel extends JPanel {
         if (traderName.isEmpty()) {
             traderName = "Unknown";
         }
+        String customerName = customerNameField.getText().trim();
+        if (customerName.isEmpty()) {
+            customerName = "Unknown";
+        }
 
         // Filter out MISC cards and extract corresponding table values
         List<TradeItem> nonMiscCards = new ArrayList<>();
@@ -1754,7 +1758,7 @@ public class TradePanel extends JPanel {
 
             // Use new method with table values and payment type
             String filename = exportService.exportToPOSFormat(
-                    nonMiscCards, traderName, nonMiscUnitPrices, nonMiscQuantities, paymentType);
+                    nonMiscCards, traderName, customerName, nonMiscUnitPrices, nonMiscQuantities, paymentType);
 
             String message = String.format("POS import file created!\n\n" +
                             "File: %s\n" +

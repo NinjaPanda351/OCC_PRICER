@@ -80,16 +80,17 @@ public class TradeReceivingExportService {
      *                    {@code "partial"} (~41.67%), or {@code "inventory"} (0%)
      * @return the filename of the exported CSV
      */
-    public String exportToPOSFormat(List<TradeItem> items, String traderName,
+    public String exportToPOSFormat(List<TradeItem> items, String traderName, String customerName,
                                     List<BigDecimal> unitPrices, List<Integer> quantities,
                                     String paymentType) throws IOException {
         ensureDataDirectoryExists();
 
         String timestamp = LocalDateTime.now().format(
-                DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-        String safeName = sanitizeFilename(traderName);
-        String filename = String.format("%s/pos_import_%s_%s.csv",
-                DATA_DIRECTORY, timestamp, safeName);
+                DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+        String safeCustomer = sanitizeFilename(customerName.isEmpty() ? "UNKNOWN" : customerName).toUpperCase();
+        String safeTrader  = sanitizeFilename(traderName.isEmpty()  ? "UNKNOWN" : traderName).toUpperCase();
+        String filename = String.format("%s/%s_%s_%s.csv",
+                DATA_DIRECTORY, timestamp, safeCustomer, safeTrader);
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
             // Write header
@@ -194,9 +195,10 @@ public class TradeReceivingExportService {
         // New format: YYYY-MM-DD_HH-MM-SS_CUSTOMER_NAME
         LocalDateTime now = LocalDateTime.now();
         String timestamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
-        String safeName = sanitizeFilename(customerName.isEmpty() ? "UNKNOWN" : customerName).toUpperCase();
-        String filename = String.format("%s/%s_%s.txt",
-                DATA_DIRECTORY, timestamp, safeName);
+        String safeCustomer = sanitizeFilename(customerName.isEmpty() ? "UNKNOWN" : customerName).toUpperCase();
+        String safeTrader   = sanitizeFilename(traderName == null || traderName.isEmpty() ? "UNKNOWN" : traderName).toUpperCase();
+        String filename = String.format("%s/%s_%s_%s.txt",
+                DATA_DIRECTORY, timestamp, safeCustomer, safeTrader);
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
             writer.println("╔════════════════════════════════════════════════════════════╗");
