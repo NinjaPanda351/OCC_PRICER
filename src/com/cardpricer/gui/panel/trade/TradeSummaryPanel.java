@@ -16,6 +16,7 @@ public class TradeSummaryPanel extends JPanel {
     private final JLabel halfRateLabel;
     private final JLabel thirdRateLabel;
 
+    /** Constructs the summary panel and initialises all value labels to zero. */
     public TradeSummaryPanel() {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
         setBorder(BorderFactory.createCompoundBorder(

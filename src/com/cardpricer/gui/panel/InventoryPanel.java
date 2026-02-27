@@ -41,6 +41,7 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
     private List<Card> loadedCards;
     private List<Integer> quantities; // Tracks quantity for each card
 
+    /** Constructs the Inventory Update panel and initialises its UI components. */
     public InventoryPanel() {
         this.apiService = new ScryfallApiService();
         this.loadedCards = new ArrayList<>();

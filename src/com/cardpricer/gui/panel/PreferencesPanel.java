@@ -86,6 +86,7 @@ public class PreferencesPanel extends JPanel {
     private JButton applyButton;
     private JTextField sharedFolderField;
 
+    /** Constructs the preferences panel and initialises the Appearance and Network tabs. */
     public PreferencesPanel() {
         setLayout(new BorderLayout(15, 15));
         setBorder(new EmptyBorder(20, 20, 20, 20));
@@ -332,14 +333,18 @@ public class PreferencesPanel extends JPanel {
     }
 
     /**
-     * Gets the saved theme preference
+     * Returns the persisted theme display name, defaulting to {@code "FlatLaf Dark"}.
+     *
+     * @return saved theme name
      */
     public static String getSavedTheme() {
         return prefs.get(THEME_KEY, "FlatLaf Dark");
     }
 
     /**
-     * Applies the saved theme at application startup
+     * Reads the saved theme preference and applies it immediately.
+     * Intended to be called before the main frame is built so that the correct
+     * Look-and-Feel is in place before any components are created.
      */
     public static void applySavedTheme() {
         String theme = getSavedTheme();

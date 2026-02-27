@@ -45,18 +45,27 @@ public class OrderItem {
     }
 
     // Getters
+    /** Returns the card for this order item. */
     public Card getCard() {
         return myCard;
     }
 
+    /** Returns {@code true} if this item is the foil variant. */
     public boolean isFoil() {
         return myIsFoil;
     }
 
+    /** Returns the quantity ordered. */
     public int getQuantity() {
         return myQuantity;
     }
 
+    /**
+     * Sets a new quantity for this order item.
+     *
+     * @param theQuantity the new quantity; must be at least 1
+     * @throws IllegalArgumentException if {@code theQuantity} is less than 1
+     */
     public void setQuantity(final int theQuantity) {
         if (theQuantity < 1) {
             throw new IllegalArgumentException("Quantity must be at least 1");
@@ -64,6 +73,7 @@ public class OrderItem {
         this.myQuantity = theQuantity;
     }
 
+    /** Returns the unit price for this item as a {@link BigDecimal}. */
     public BigDecimal getUnitPrice() {
         return myUnitPrice;
     }

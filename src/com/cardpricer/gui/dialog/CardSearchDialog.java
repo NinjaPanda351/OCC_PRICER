@@ -19,8 +19,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Dialog for searching cards when collector number is unknown
- * Supports fuzzy name search and autocomplete
+ * Modal dialog for searching Magic cards by name when the collector number is unknown.
+ * Results are fetched from the Scryfall search API and displayed in a scrollable list
+ * with card art previews on hover.
  */
 public class CardSearchDialog extends JDialog {
 
@@ -40,6 +41,12 @@ public class CardSearchDialog extends JDialog {
     private Timer searchTimer;
     private CardImagePopup imagePopup;
 
+    /**
+     * Creates the dialog.
+     *
+     * @param owner      parent window used for centering and modal blocking
+     * @param apiService Scryfall service used to perform name searches
+     */
     public CardSearchDialog(Window owner, ScryfallApiService apiService) {
         super(owner, "Search for Card", ModalityType.APPLICATION_MODAL);
         this.apiService = apiService;
@@ -330,10 +337,19 @@ public class CardSearchDialog extends JDialog {
         }
     }
 
+    /**
+     * Returns the card chosen by the user, or {@code null} if the dialog was
+     * cancelled or closed without a selection.
+     */
     public Card getSelectedCard() {
         return selectedCard;
     }
 
+    /**
+     * Returns the finish chosen in the finish combo box: {@code ""} (Normal),
+     * {@code "F"} (Foil), or {@code "E"} (Etched).  Returns {@code null} if no
+     * card was selected.
+     */
     public String getSelectedFinish() {
         return selectedFinish;
     }

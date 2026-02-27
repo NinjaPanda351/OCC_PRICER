@@ -36,8 +36,22 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Quick-entry panel for receiving cards from trades/purchases
- * Format: "TDM 3" (normal), "TDM 3f" (foil), "TDM 3e" (etched)
+ * Quick-entry panel for receiving cards from trades and purchases.
+ *
+ * <p>Cards are entered via a code field using the formats:
+ * <ul>
+ *   <li>{@code TDM 3} — normal finish</li>
+ *   <li>{@code TDM 3f} — foil finish</li>
+ *   <li>{@code TDM 3e} — etched finish</li>
+ *   <li>{@code TDM 3s} — surge foil finish</li>
+ *   <li>{@code PLST ARB 1} — The List reprint</li>
+ *   <li>{@code misc} — manual entry with custom name and price</li>
+ * </ul>
+ *
+ * <p>Prices are fetched from the Scryfall API, rounded via {@link com.cardpricer.service.PricingService},
+ * and can be exported to a POS CSV file or saved as a plain-text trade receipt.
+ * Keyboard shortcuts: {@code Ctrl+F}/{@code F2} = search by name, {@code Numpad +} = duplicate row,
+ * {@code Ctrl+Z} = undo last add, {@code F1} = shortcut help.
  */
 public class TradePanel extends JPanel {
 
@@ -103,6 +117,10 @@ public class TradePanel extends JPanel {
         }
     };
 
+    /**
+     * Constructs the Trade Receiving panel, initialises all sub-panels and UI components,
+     * and registers global keyboard shortcuts (Numpad+, Ctrl+Z, F1).
+     */
     public TradePanel() {
         this.apiService = new ScryfallApiService();
         this.exportService = new TradeReceivingExportService();

@@ -14,6 +14,14 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 
+/**
+ * Application entry point and main frame for OCC Card Pricer.
+ *
+ * <p>Builds the sidebar navigation, the {@link CardLayout} content area, and the
+ * status bar.  Panels are lazy-loaded on first access and intelligently unloaded
+ * when the user navigates away, using the {@link ManagedPanel} interface to avoid
+ * discarding panels with unsaved state or in-progress work.
+ */
 public class MainSwingApplication {
 
     // Main frame parts
@@ -40,6 +48,12 @@ public class MainSwingApplication {
     private static final String SCREEN_INVENTORY = "inventory";
     private static final String SCREEN_PREFERENCES = "preferences";
 
+    /**
+     * Application entry point.  Applies the saved theme then launches the Swing UI
+     * on the Event Dispatch Thread.
+     *
+     * @param args command-line arguments (unused)
+     */
     public static void main(String[] args) {
         // 1) Apply saved theme (or default to FlatLaf Dark)
         PreferencesPanel.applySavedTheme();

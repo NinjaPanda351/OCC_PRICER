@@ -32,6 +32,11 @@ public class CardImagePopup {
         }
     };
 
+    /**
+     * Creates a new card-image popup owned by the given window.
+     *
+     * @param owner the parent window used for the floating {@link JWindow}
+     */
     public CardImagePopup(Window owner) {
         popup = new JWindow(owner);
         popup.setAlwaysOnTop(true);
@@ -105,6 +110,7 @@ public class CardImagePopup {
         loader.execute();
     }
 
+    /** Hides the popup and cancels any in-progress image load. */
     public void hide() {
         currentUrl = null;
         popup.setVisible(false);

@@ -27,16 +27,24 @@ public class AppDataDirectory {
     // Public accessors
     // -------------------------------------------------------------------------
 
+    /** Returns the root user-data directory, creating it if absent. */
     public static File root()          { return ROOT; }
+    /** Returns the {@code trades} subdirectory, creating it if absent. */
     public static File trades()        { return subdir("trades"); }
+    /** Returns the {@code prices} subdirectory, creating it if absent. */
     public static File prices()        { return subdir("prices"); }
+    /** Returns the {@code inventory} subdirectory, creating it if absent. */
     public static File inventory()     { return subdir("inventory"); }
+    /** Returns the {@code combined_files} subdirectory, creating it if absent. */
     public static File combinedFiles() { return subdir("combined_files"); }
 
-    /** Returns the absolute path string for the given sub-folder. */
+    /** Returns the absolute path string for the {@code trades} sub-folder. */
     public static String tradesPath()        { return trades().getAbsolutePath(); }
+    /** Returns the absolute path string for the {@code prices} sub-folder. */
     public static String pricesPath()        { return prices().getAbsolutePath(); }
+    /** Returns the absolute path string for the {@code inventory} sub-folder. */
     public static String inventoryPath()     { return inventory().getAbsolutePath(); }
+    /** Returns the absolute path string for the {@code combined_files} sub-folder. */
     public static String combinedFilesPath() { return combinedFiles().getAbsolutePath(); }
 
     // -------------------------------------------------------------------------

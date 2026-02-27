@@ -23,7 +23,9 @@ import java.util.Date;
 import java.util.List;
 
 /**
- * Panel for managing and downloading generated data files
+ * Panel for browsing, downloading, printing, and deleting generated data files.
+ * Contains three tabs: Local Files, Shared Files (configured via Preferences), and
+ * History (trade receipts with preview and print/PDF support).
  */
 public class FileManagerPanel extends JPanel {
 
@@ -57,6 +59,7 @@ public class FileManagerPanel extends JPanel {
             "Combined Files"
     };
 
+    /** Constructs the File Manager panel and loads the local file list immediately. */
     public FileManagerPanel() {
         setLayout(new BorderLayout(15, 15));
         setBorder(new EmptyBorder(20, 20, 20, 20));

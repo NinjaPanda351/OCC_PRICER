@@ -12,17 +12,27 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Handles exporting card data and invoices to CSV format
- * All files are saved to the 'data' directory
+ * Exports card data and order invoices to CSV files in various POS-import formats.
+ * Output files are written to the application data directory managed by
+ * {@link com.cardpricer.util.AppDataDirectory}.
  */
 public class CsvExportService {
 
     private static final String DATA_DIRECTORY    = com.cardpricer.util.AppDataDirectory.root().getAbsolutePath();
     private static final String PRICES_DIRECTORY  = com.cardpricer.util.AppDataDirectory.pricesPath();
 
+    /**
+     * Supported CSV export formats.
+     * <ul>
+     *   <li>{@code IMPORT_UTILITY} — full format with department, category, artist, rarity, and tax</li>
+     *   <li>{@code ITEM_WIZARD} — simplified Item Wizard format with placeholder fields</li>
+     *   <li>{@code ITEM_WIZARD_CHANGE_QTY_ZERO} — Item Wizard change-qty format, zeroing on-hand quantities</li>
+     *   <li>{@code TRADE} — trade-specific export format</li>
+     * </ul>
+     */
     public enum ExportFormat {
-        IMPORT_UTILITY,  // Full format with department, category, artist, rarity, tax
-        ITEM_WIZARD,      // Simplified format with placeholder fields
+        IMPORT_UTILITY,
+        ITEM_WIZARD,
         ITEM_WIZARD_CHANGE_QTY_ZERO,
         TRADE
     }
@@ -80,10 +90,11 @@ public class CsvExportService {
     }
 
     /**
-     * Exports cards to CSV using Import Utility format (default)
-     * @param cards List of cards to export
-     * @param filename Output filename
-     * @throws IOException if file cannot be written
+     * Exports cards to CSV using the Import Utility format (default).
+     *
+     * @param cards    list of cards to export
+     * @param filename output filename (written inside the prices directory)
+     * @throws IOException if the file cannot be written
      */
     public void exportCardsToCsv(List<Card> cards, String filename) throws IOException {
         exportCardsToCsv(cards, filename, ExportFormat.IMPORT_UTILITY);

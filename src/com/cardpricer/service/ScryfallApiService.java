@@ -14,6 +14,11 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Provides access to the Scryfall REST API for fetching individual cards and
+ * full set listings.  All network calls are synchronous; callers are responsible
+ * for running them off the EDT.
+ */
 public class ScryfallApiService {
     private static final String SEARCH_API = "https://api.scryfall.com/cards/search";
     private static final String CARD_API = "https://api.scryfall.com/cards";

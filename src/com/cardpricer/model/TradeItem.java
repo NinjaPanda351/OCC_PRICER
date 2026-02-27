@@ -57,18 +57,27 @@ public class TradeItem {
     }
 
     // Getters
+    /** Returns the card represented by this trade item. */
     public Card getCard() {
         return myCard;
     }
 
+    /** Returns {@code true} if this item uses a foil or special foil finish. */
     public boolean isFoil() {
         return myIsFoil;
     }
 
+    /** Returns the quantity for this trade item. */
     public int getQuantity() {
         return myQuantity;
     }
 
+    /**
+     * Sets a new quantity for this trade item.
+     *
+     * @param theQuantity the new quantity; must be at least 1
+     * @throws IllegalArgumentException if {@code theQuantity} is less than 1
+     */
     public void setQuantity(final int theQuantity) {
         if (theQuantity < 1) {
             throw new IllegalArgumentException("Quantity must be at least 1");
@@ -76,6 +85,7 @@ public class TradeItem {
         this.myQuantity = theQuantity;
     }
 
+    /** Returns the per-unit price for this trade item. */
     public BigDecimal getUnitPrice() {
         return myUnitPrice;
     }
@@ -137,6 +147,11 @@ public class TradeItem {
         return myUnitPrice != null && myUnitPrice.compareTo(BigDecimal.ZERO) > 0;
     }
 
+    /**
+     * Overrides the unit price for this trade item (e.g. for manually adjusted prices).
+     *
+     * @param theUnitPrice new unit price; may be {@code null} to clear
+     */
     public void setUnitPrice(final BigDecimal theUnitPrice) {
         this.myUnitPrice = theUnitPrice;
     }

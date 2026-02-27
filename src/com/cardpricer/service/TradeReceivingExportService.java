@@ -344,8 +344,17 @@ public class TradeReceivingExportService {
     }
 
     /**
-     * Exports trade items directly to inventory format (Item Wizard Change Qty).
-     * Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
+     * Exports trade items to Item Wizard Change Qty inventory format.
+     *
+     * <p>Format: {@code CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY}
+     *
+     * <p>Cards with set code {@code "MISC"} are excluded from the output.
+     *
+     * @param items      list of received trade items
+     * @param conditions condition string for each item (may be {@code null})
+     * @param quantities quantity for each item
+     * @return the absolute path of the generated CSV file
+     * @throws IOException if the file cannot be written
      */
     public String exportToInventoryFormat(List<TradeItem> items, List<String> conditions,
                                           List<Integer> quantities) throws IOException {

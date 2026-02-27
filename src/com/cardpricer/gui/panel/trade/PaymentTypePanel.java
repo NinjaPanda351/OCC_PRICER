@@ -32,6 +32,12 @@ public class PaymentTypePanel extends JPanel {
 
     private final Runnable onSelectionChanged;
 
+    /**
+     * Creates the payment-type selector panel.
+     *
+     * @param onSelectionChanged callback invoked on the EDT whenever the user
+     *                           changes the selected payment method
+     */
     public PaymentTypePanel(Runnable onSelectionChanged) {
         this.onSelectionChanged = onSelectionChanged;
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));

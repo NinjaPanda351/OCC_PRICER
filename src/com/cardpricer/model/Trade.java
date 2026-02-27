@@ -31,7 +31,10 @@ public class Trade {
     }
 
     /**
-     * Creates a trade with trader information
+     * Creates a trade with trader information.
+     *
+     * @param theTraderName name of the trader
+     * @param theTradeDate  formatted date string for the trade
      */
     public Trade(final String theTraderName, final String theTradeDate) {
         this();
@@ -40,34 +43,59 @@ public class Trade {
     }
 
     // Getters and Setters
+    /** Returns the name of the trader involved in this trade. */
     public String getTraderName() {
         return myTraderName;
     }
 
+    /**
+     * Sets the name of the trader involved in this trade.
+     *
+     * @param theTraderName trader's name
+     */
     public void setTraderName(final String theTraderName) {
         this.myTraderName = theTraderName;
     }
 
+    /** Returns the formatted date string for this trade. */
     public String getTradeDate() {
         return myTradeDate;
     }
 
+    /**
+     * Sets the formatted date string for this trade.
+     *
+     * @param theTradeDate formatted date string
+     */
     public void setTradeDate(final String theTradeDate) {
         this.myTradeDate = theTradeDate;
     }
 
+    /** Returns any notes associated with this trade, or {@code null} if none. */
     public String getNotes() {
         return myNotes;
     }
 
+    /**
+     * Sets notes for this trade.
+     *
+     * @param theNotes free-form notes text; may be {@code null}
+     */
     public void setNotes(final String theNotes) {
         this.myNotes = theNotes;
     }
 
+    /** Returns the trade rate as a percentage (e.g. {@code 100.0} = 100%). */
     public double getTradeRate() {
         return myTradeRate;
     }
 
+    /**
+     * Sets the trade rate.
+     *
+     * @param theTradeRate percentage rate; must be non-negative
+     * @throws IllegalArgumentException if {@code theTradeRate} is negative
+     */
     public void setTradeRate(final double theTradeRate) {
         if (theTradeRate < 0) {
             throw new IllegalArgumentException("Trade rate cannot be negative");
@@ -75,19 +103,28 @@ public class Trade {
         this.myTradeRate = theTradeRate;
     }
 
+    /** Returns the unique identifier generated for this trade. */
     public String getTradeId() {
         return myTradeId;
     }
 
+    /** Returns a defensive copy of the list of items being given away. */
     public List<TradeItem> getGivingItems() {
         return new ArrayList<>(myGivingItems);
     }
 
+    /** Returns a defensive copy of the list of items being received. */
     public List<TradeItem> getReceivingItems() {
         return new ArrayList<>(myReceivingItems);
     }
 
     // Item management
+    /**
+     * Adds an item to the list of cards being given away.
+     *
+     * @param item trade item to add; must not be {@code null}
+     * @throws IllegalArgumentException if {@code item} is {@code null}
+     */
     public void addGivingItem(final TradeItem item) {
         if (item == null) {
             throw new IllegalArgumentException("Trade item cannot be null");
@@ -95,6 +132,12 @@ public class Trade {
         myGivingItems.add(item);
     }
 
+    /**
+     * Adds an item to the list of cards being received.
+     *
+     * @param item trade item to add; must not be {@code null}
+     * @throws IllegalArgumentException if {@code item} is {@code null}
+     */
     public void addReceivingItem(final TradeItem item) {
         if (item == null) {
             throw new IllegalArgumentException("Trade item cannot be null");
@@ -102,22 +145,34 @@ public class Trade {
         myReceivingItems.add(item);
     }
 
+    /**
+     * Removes the giving item at the specified index, if the index is valid.
+     *
+     * @param index zero-based position in the giving list
+     */
     public void removeGivingItem(final int index) {
         if (index >= 0 && index < myGivingItems.size()) {
             myGivingItems.remove(index);
         }
     }
 
+    /**
+     * Removes the receiving item at the specified index, if the index is valid.
+     *
+     * @param index zero-based position in the receiving list
+     */
     public void removeReceivingItem(final int index) {
         if (index >= 0 && index < myReceivingItems.size()) {
             myReceivingItems.remove(index);
         }
     }
 
+    /** Removes all items from the giving list. */
     public void clearGivingItems() {
         myGivingItems.clear();
     }
 
+    /** Removes all items from the receiving list. */
     public void clearReceivingItems() {
         myReceivingItems.clear();
     }

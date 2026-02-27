@@ -67,14 +67,18 @@ public class CardEntry {
     }
 
     // Getters
+
+    /** Returns the set-and-collector code for this entry (e.g. {@code "MKM 1"} or {@code "MKM 1f"}). */
     public String getSetCollectorCode() {
         return mySetCollectorCode;
     }
 
+    /** Returns the display name for this entry, including any frame-effect suffix. */
     public String getCardName() {
         return myCardName;
     }
 
+    /** Returns the raw (unrounded) price for this entry. */
     public BigDecimal getPrice() {
         return myPrice;
     }
@@ -163,6 +167,14 @@ public class CardEntry {
                 roundedPrice);
     }
 
+    /**
+     * Converts this entry to a CSV row for the Item Wizard Change Qty format,
+     * leaving the current on-hand quantity blank and setting the new quantity to zero.
+     *
+     * <p>Format: {@code CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY}
+     *
+     * @return a CSV row string representing this entry with a zero new-quantity
+     */
     public String toZeroOutItems() {
         BigDecimal roundedPrice = getRoundedPrice();
         String cardName = myCardName.replace("\"", "\"\"");

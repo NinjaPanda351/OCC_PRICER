@@ -43,6 +43,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
     private SwingWorker<Void, String> currentWorker;
 
+    /** Constructs the Set Pricer panel and builds the set-checkbox list. */
     public BulkPricerPanel() {
         this.apiService = new ScryfallApiService();
         this.csvService = new CsvExportService();
@@ -474,7 +475,8 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
     }
 
     /**
-     * Background worker for fetching multiple sets
+     * Background worker that fetches card prices for a list of sets from Scryfall,
+     * exports individual per-set CSV files, and optionally creates combined split files.
      */
     private class BulkFetchWorker extends SwingWorker<Void, String> {
         private final List<String> sets;
@@ -485,6 +487,14 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
         private int failureCount = 0;
         private List<com.cardpricer.model.CardEntry> allCardEntries = new ArrayList<>();
 
+        /**
+         * Creates the worker.
+         *
+         * @param sets          list of custom set codes to fetch
+         * @param format        CSV export format to use for each set file
+         * @param createCombined whether to produce merged combined files
+         * @param splitSize     maximum number of card entries per combined file
+         */
         public BulkFetchWorker(List<String> sets, CsvExportService.ExportFormat format,
                                boolean createCombined, int splitSize) {
             this.sets = sets;

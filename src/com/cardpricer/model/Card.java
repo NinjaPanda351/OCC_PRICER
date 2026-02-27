@@ -4,6 +4,10 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Represents a Magic: The Gathering card with pricing, rarity, and frame-effect data
+ * as returned by the Scryfall API.
+ */
 public class Card {
     private String myName;
     private String mySetCode;
@@ -16,7 +20,7 @@ public class Card {
     private String myArtist;
     private String myImageUrl;
 
-    // Default constructor
+    /** Constructs a Card with all price fields defaulting to {@code "N/A"}. */
     public Card() {
         this.myPrice = "N/A";
         this.myFoilPrice = "N/A";
@@ -24,7 +28,13 @@ public class Card {
         this.myFrameEffects = new ArrayList<>();
     }
 
-    // Constructor with essential fields
+    /**
+     * Constructs a Card with the three identifying fields.
+     *
+     * @param theName            card name
+     * @param theSetCode         set code (will be stored uppercase)
+     * @param theCollectorNumber collector number string
+     */
     public Card(final String theName, final String theSetCode, final String theCollectorNumber) {
         this();
         this.myName = theName;
@@ -33,10 +43,17 @@ public class Card {
     }
 
     // Getters and Setters
+    /** Returns the card name. */
     public String getName() {
         return this.myName;
     }
 
+    /**
+     * Sets the card name.
+     *
+     * @param theName card name; must not be {@code null} or blank
+     * @throws IllegalArgumentException if {@code theName} is null or empty
+     */
     public void setName(final String theName) {
         if (theName == null || theName.trim().isEmpty()) {
             throw new IllegalArgumentException("Card name cannot be null or empty");
@@ -44,10 +61,17 @@ public class Card {
         this.myName = theName.trim();
     }
 
+    /** Returns the set code (uppercase). */
     public String getSetCode() {
         return this.mySetCode;
     }
 
+    /**
+     * Sets the set code, trimming whitespace and converting to uppercase.
+     *
+     * @param theSetCode set code; must not be {@code null} or blank
+     * @throws IllegalArgumentException if {@code theSetCode} is null or empty
+     */
     public void setSetCode(final String theSetCode) {
         if (theSetCode == null || theSetCode.trim().isEmpty()) {
             throw new IllegalArgumentException("Set code cannot be null or empty");
@@ -56,10 +80,17 @@ public class Card {
         this.mySetCode = theSetCode.trim().toUpperCase();
     }
 
+    /** Returns the collector number string. */
     public String getCollectorNumber() {
         return this.myCollectorNumber;
     }
 
+    /**
+     * Sets the collector number.
+     *
+     * @param theCollectorNumber collector number; must not be {@code null} or blank
+     * @throws IllegalArgumentException if {@code theCollectorNumber} is null or empty
+     */
     public void setCollectorNumber(final String theCollectorNumber) {
         if (theCollectorNumber == null || theCollectorNumber.trim().isEmpty()) {
             throw new IllegalArgumentException("Collector number cannot be null or empty");
@@ -67,10 +98,17 @@ public class Card {
         this.myCollectorNumber = theCollectorNumber.trim();
     }
 
+    /** Returns the rarity string (lowercase), e.g. {@code "rare"} or {@code "mythic"}. */
     public String getRarity() {
         return this.myRarity;
     }
 
+    /**
+     * Sets the rarity, trimming whitespace and converting to lowercase.
+     *
+     * @param theRarity rarity string; must not be {@code null} or blank
+     * @throws IllegalArgumentException if {@code theRarity} is null or empty
+     */
     public void setRarity(final String theRarity) {
         if (theRarity == null || theRarity.trim().isEmpty()) {
             throw new IllegalArgumentException("Rarity cannot be null or empty");
@@ -78,14 +116,25 @@ public class Card {
         this.myRarity = theRarity.toLowerCase().trim();
     }
 
+    /** Returns the normal (non-foil) price string, or {@code "N/A"} if unavailable. */
     public String getPrice() {
         return this.myPrice;
     }
 
+    /**
+     * Returns the normal price as a {@link BigDecimal}, or {@link BigDecimal#ZERO} if
+     * the price is {@code "N/A"} or absent.
+     */
     public BigDecimal getPriceAsBigDecimal() {
         return parsePriceString(this.myPrice);
     }
 
+    /**
+     * Sets the normal price.
+     *
+     * @param thePrice decimal price string (e.g. {@code "1.23"}), {@code "N/A"}, or {@code null}
+     * @throws IllegalArgumentException if the string is neither {@code "N/A"} nor a valid decimal
+     */
     public void setPrice(final String thePrice) {
         if (thePrice == null) {
             this.myPrice = "N/A";
@@ -101,14 +150,25 @@ public class Card {
         this.myPrice = thePrice;
     }
 
+    /** Returns the foil price string, or {@code "N/A"} if unavailable. */
     public String getFoilPrice() {
         return this.myFoilPrice;
     }
 
+    /**
+     * Returns the foil price as a {@link BigDecimal}, or {@link BigDecimal#ZERO} if
+     * the price is {@code "N/A"} or absent.
+     */
     public BigDecimal getFoilPriceAsBigDecimal() {
         return parsePriceString(this.myFoilPrice);
     }
 
+    /**
+     * Sets the foil price.
+     *
+     * @param theFoilPrice decimal price string, {@code "N/A"}, or {@code null}
+     * @throws IllegalArgumentException if the string is not a valid decimal and not {@code "N/A"}
+     */
     public void setFoilPrice(final String theFoilPrice) {
         if (theFoilPrice == null) {
             this.myFoilPrice = "N/A";
@@ -124,14 +184,25 @@ public class Card {
         this.myFoilPrice = theFoilPrice;
     }
 
+    /** Returns the etched-foil price string, or {@code "N/A"} if unavailable. */
     public String getEtchedPrice() {
         return this.myEtchedPrice;
     }
 
+    /**
+     * Returns the etched price as a {@link BigDecimal}, or {@link BigDecimal#ZERO} if
+     * the price is {@code "N/A"} or absent.
+     */
     public BigDecimal getEtchedPriceAsBigDecimal() {
         return parsePriceString(this.myEtchedPrice);
     }
 
+    /**
+     * Sets the etched-foil price.
+     *
+     * @param theEtchedPrice decimal price string, {@code "N/A"}, or {@code null}
+     * @throws IllegalArgumentException if the string is not a valid decimal and not {@code "N/A"}
+     */
     public void setEtchedPrice(final String theEtchedPrice) {
         if (theEtchedPrice == null) {
             this.myEtchedPrice = "N/A";
@@ -147,68 +218,103 @@ public class Card {
         this.myEtchedPrice = theEtchedPrice;
     }
 
+    /** Returns {@code true} if an etched-foil price is available (not {@code "N/A"}). */
     public boolean hasEtchedPrice() {
         return !this.myEtchedPrice.equals("N/A");
     }
 
+    /** Returns a defensive copy of the list of frame-effect identifiers for this card. */
     public List<String> getFrameEffects() {
         return new ArrayList<>(this.myFrameEffects);
     }
 
+    /**
+     * Sets the frame-effect list.
+     *
+     * @param theFrameEffects list of Scryfall frame-effect strings; may be {@code null}
+     */
     public void setFrameEffects(final List<String> theFrameEffects) {
         this.myFrameEffects = theFrameEffects != null ?
                 new ArrayList<>(theFrameEffects) : new ArrayList<>();
     }
 
+    /** Returns the artist name for this card printing, or {@code null} if not set. */
     public String getArtist() {
         return this.myArtist;
     }
 
+    /**
+     * Sets the artist name, trimming whitespace.
+     *
+     * @param theArtist artist name, or {@code null}
+     */
     public void setArtist(final String theArtist) {
         this.myArtist = theArtist != null ? theArtist.trim() : null;
     }
 
+    /** Returns the Scryfall "normal" image URL for this card, or {@code null} if not fetched. */
     public String getImageUrl() {
         return myImageUrl;
     }
 
+    /**
+     * Sets the Scryfall image URL for this card.
+     *
+     * @param url absolute URL string, or {@code null}
+     */
     public void setImageUrl(String url) {
         myImageUrl = url;
     }
 
     // Helper methods
+    /** Returns {@code true} if a non-foil price is available (not {@code null} and not {@code "N/A"}). */
     public boolean hasNormalPrice() {
         return myPrice != null && !myPrice.equals("N/A");
     }
 
+    /** Returns {@code true} if a foil price is available (not {@code null} and not {@code "N/A"}). */
     public boolean hasFoilPrice() {
         return myFoilPrice != null && !myFoilPrice.equals("N/A");
     }
 
+    /**
+     * Returns the appropriate price string based on the finish type.
+     *
+     * @param isFoil {@code true} to return the foil price; {@code false} for the normal price
+     * @return price string, or {@code "N/A"} if unavailable
+     */
     public String getDisplayPrice(boolean isFoil) {
         return isFoil ? myFoilPrice : myPrice;
     }
 
+    /** Returns {@code true} if this card has at least one frame effect. */
     public boolean hasFrameEffects() {
         return myFrameEffects != null && !myFrameEffects.isEmpty();
     }
 
+    /** Returns {@code true} if this card has the "showcase" frame effect. */
     public boolean isShowcase() {
         return myFrameEffects != null && myFrameEffects.contains("showcase");
     }
 
+    /** Returns {@code true} if this card has the "extendedart" frame effect. */
     public boolean isExtendedArt() {
         return myFrameEffects != null && myFrameEffects.contains("extendedart");
     }
 
+    /** Returns {@code true} if this card has the "borderless" frame effect. */
     public boolean isBorderless() {
         return myFrameEffects != null && myFrameEffects.contains("borderless");
     }
 
+    /** Returns {@code true} if this card has the "etched" frame effect. */
     public boolean isEtched() {
         return myFrameEffects != null && myFrameEffects.contains("etched");
     }
 
+    /**
+     * Returns the first (primary) frame effect string, or {@code null} if none.
+     */
     public String getPrimaryFrameEffect() {
         if (myFrameEffects == null || myFrameEffects.isEmpty()) {
             return null;
@@ -216,6 +322,11 @@ public class Card {
         return myFrameEffects.get(0);
     }
 
+    /**
+     * Returns a single-character code for the primary frame effect
+     * ({@code "S"} showcase, {@code "E"} extended art, {@code "B"} borderless,
+     * {@code "T"} etched), or {@code ""} if no frame effect is present.
+     */
     public String getFrameEffectCode() {
         if (!hasFrameEffects()) {
             return "";
@@ -235,6 +346,10 @@ public class Card {
         }
     }
 
+    /**
+     * Returns a human-readable display name for the primary frame effect
+     * (e.g. {@code "Showcase"}, {@code "Extended Art"}), or {@code null} if none.
+     */
     public String getFrameEffectDisplay() {
         if (!hasFrameEffects()) {
             return null;
@@ -255,6 +370,11 @@ public class Card {
         }
     }
 
+    /**
+     * Returns the single-character rarity abbreviation used in the POS export
+     * ({@code "c"} common, {@code "u"} uncommon, {@code "r"} rare, {@code "m"} mythic),
+     * or the lowercase rarity string for other values.
+     */
     public String getRarityAbbreviation() {
         if (myRarity == null) {
             return "";
