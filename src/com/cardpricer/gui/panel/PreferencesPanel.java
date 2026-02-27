@@ -1,16 +1,22 @@
 package com.cardpricer.gui.panel;
 
+import com.cardpricer.model.BuyRateRule;
+import com.cardpricer.service.BuyRateService;
 import com.formdev.flatlaf.*;
 import com.formdev.flatlaf.themes.*;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.prefs.Preferences;
 
@@ -86,6 +92,11 @@ public class PreferencesPanel extends JPanel {
     private JButton applyButton;
     private JTextField sharedFolderField;
 
+    // Buy Rates tab state
+    private final BuyRateService buyRateService = new BuyRateService();
+    private DefaultTableModel rulesTableModel;
+    private JLabel buyRatesStatusLabel;
+
     /** Constructs the preferences panel and initialises the Appearance and Network tabs. */
     public PreferencesPanel() {
         setLayout(new BorderLayout(15, 15));
@@ -118,6 +129,7 @@ public class PreferencesPanel extends JPanel {
         JTabbedPane tabs = new JTabbedPane();
         tabs.addTab("Appearance", createAppearanceTab());
         tabs.addTab("Network",    createNetworkTab());
+        tabs.addTab("Buy Rates",  createBuyRatesTab());
         return tabs;
     }
 
@@ -244,6 +256,179 @@ public class PreferencesPanel extends JPanel {
     /** Returns the configured shared trades folder, or null/empty if not set. */
     public static String getSharedTradesFolder() {
         return prefs.get(SHARED_FOLDER_KEY, "");
+    }
+
+    // -------------------------------------------------------------------------
+    // Buy Rates tab
+    // -------------------------------------------------------------------------
+
+    private JPanel createBuyRatesTab() {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(new EmptyBorder(15, 10, 10, 10));
+
+        // --- Section 1: Tiered Rules ---
+        JPanel rulesSection = new JPanel(new BorderLayout(8, 8));
+        rulesSection.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder("Tiered Buy Rates"),
+                new EmptyBorder(10, 10, 10, 10)
+        ));
+
+        rulesTableModel = new DefaultTableModel(
+                new String[]{"Min Price ($)", "Credit (%)", "Check (%)"}, 0) {
+            @Override
+            public Class<?> getColumnClass(int col) { return String.class; }
+        };
+        JTable rulesTable = new JTable(rulesTableModel);
+        rulesTable.setRowHeight(24);
+        rulesTable.getTableHeader().setReorderingAllowed(false);
+        JScrollPane rulesScroll = new JScrollPane(rulesTable);
+        rulesScroll.setPreferredSize(new Dimension(500, 160));
+        rulesSection.add(rulesScroll, BorderLayout.CENTER);
+
+        // Buttons row
+        JPanel rulesBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+
+        JButton addRowBtn = new JButton("Add Row");
+        addRowBtn.addActionListener(e -> rulesTableModel.addRow(new String[]{"0.00", "50", "33"}));
+
+        JButton removeRowBtn = new JButton("Remove Selected");
+        removeRowBtn.addActionListener(e -> {
+            int row = rulesTable.getSelectedRow();
+            if (row < 0) return;
+            String minVal = (String) rulesTableModel.getValueAt(row, 0);
+            try {
+                if (new BigDecimal(minVal.trim()).compareTo(BigDecimal.ZERO) == 0) {
+                    JOptionPane.showMessageDialog(this,
+                            "The $0.00 catch-all row cannot be removed.",
+                            "Protected Row", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+            } catch (NumberFormatException ignored) {}
+            rulesTableModel.removeRow(row);
+        });
+
+        JButton saveRulesBtn = new JButton("Save Rules");
+        saveRulesBtn.addActionListener(e -> saveRules());
+
+        buyRatesStatusLabel = new JLabel(" ");
+        buyRatesStatusLabel.setFont(buyRatesStatusLabel.getFont().deriveFont(Font.ITALIC, 11f));
+
+        rulesBtns.add(addRowBtn);
+        rulesBtns.add(removeRowBtn);
+        rulesBtns.add(saveRulesBtn);
+        rulesBtns.add(buyRatesStatusLabel);
+        rulesSection.add(rulesBtns, BorderLayout.SOUTH);
+
+        JLabel rulesHelp = new JLabel(
+                "<html>Rules are evaluated from highest to lowest threshold — first match wins.<br>"
+                + "The <b>$0.00</b> row is the catch-all and cannot be removed. "
+                + "Rates are entered as whole percentages (e.g. 60 for 60%).</html>");
+        rulesHelp.setFont(rulesHelp.getFont().deriveFont(Font.ITALIC, 11f));
+        rulesHelp.setForeground(UIManager.getColor("Label.disabledForeground"));
+        rulesSection.add(rulesHelp, BorderLayout.NORTH);
+
+        rulesSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+        rulesSection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 300));
+
+        // --- Section 2: Bounty Cards (groundwork) ---
+        JPanel bountySection = new JPanel(new BorderLayout(8, 8));
+        bountySection.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder("Bounty Cards"),
+                new EmptyBorder(10, 10, 10, 10)
+        ));
+
+        DefaultTableModel bountyModel = new DefaultTableModel(
+                new String[]{"Set", "Collector #", "Card Name", "Credit (%)", "Check (%)"}, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        };
+        JTable bountyTable = new JTable(bountyModel);
+        bountyTable.setRowHeight(24);
+        JScrollPane bountyScroll = new JScrollPane(bountyTable);
+        bountyScroll.setPreferredSize(new Dimension(500, 120));
+        bountySection.add(bountyScroll, BorderLayout.CENTER);
+
+        JPanel bountyBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JButton addBountyBtn    = new JButton("Add Bounty");
+        JButton removeBountyBtn = new JButton("Remove Bounty");
+        addBountyBtn.addActionListener(e ->
+                JOptionPane.showMessageDialog(this, "Bounty card editing coming soon!", "Coming Soon",
+                        JOptionPane.INFORMATION_MESSAGE));
+        removeBountyBtn.addActionListener(e ->
+                JOptionPane.showMessageDialog(this, "Bounty card editing coming soon!", "Coming Soon",
+                        JOptionPane.INFORMATION_MESSAGE));
+        bountyBtns.add(addBountyBtn);
+        bountyBtns.add(removeBountyBtn);
+        bountySection.add(bountyBtns, BorderLayout.SOUTH);
+
+        JLabel bountyHelp = new JLabel(
+                "<html>Bounty cards override tier rules for specific printings.<br>"
+                + "Editing is coming in a future release.</html>");
+        bountyHelp.setFont(bountyHelp.getFont().deriveFont(Font.ITALIC, 11f));
+        bountyHelp.setForeground(UIManager.getColor("Label.disabledForeground"));
+        bountySection.add(bountyHelp, BorderLayout.NORTH);
+
+        bountySection.setAlignmentX(Component.LEFT_ALIGNMENT);
+        bountySection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 260));
+
+        panel.add(rulesSection);
+        panel.add(Box.createVerticalStrut(12));
+        panel.add(bountySection);
+        panel.add(Box.createVerticalGlue());
+
+        // Populate table from saved prefs
+        loadRulesIntoTable();
+
+        return panel;
+    }
+
+    /** Populates the tiered-rules table from the current BuyRateService state. */
+    private void loadRulesIntoTable() {
+        if (rulesTableModel == null) return;
+        rulesTableModel.setRowCount(0);
+        for (BuyRateRule rule : buyRateService.getRules()) {
+            // Display rates as whole percentages
+            String minStr    = rule.thresholdMin.toPlainString();
+            String creditStr = rule.creditRate.multiply(new BigDecimal("100"))
+                                   .stripTrailingZeros().toPlainString();
+            String checkStr  = rule.checkRate.multiply(new BigDecimal("100"))
+                                   .stripTrailingZeros().toPlainString();
+            rulesTableModel.addRow(new String[]{minStr, creditStr, checkStr});
+        }
+    }
+
+    /** Reads the rules table, validates, and persists via BuyRateService. */
+    private void saveRules() {
+        List<BuyRateRule> newRules = new ArrayList<>();
+        for (int i = 0; i < rulesTableModel.getRowCount(); i++) {
+            try {
+                BigDecimal min    = new BigDecimal(((String) rulesTableModel.getValueAt(i, 0)).trim());
+                BigDecimal credit = new BigDecimal(((String) rulesTableModel.getValueAt(i, 1)).trim())
+                                        .divide(new BigDecimal("100"));
+                BigDecimal check  = new BigDecimal(((String) rulesTableModel.getValueAt(i, 2)).trim())
+                                        .divide(new BigDecimal("100"));
+                newRules.add(new BuyRateRule(min, credit, check));
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(this,
+                        "Row " + (i + 1) + " contains invalid numbers. Please correct and try again.",
+                        "Invalid Input", JOptionPane.ERROR_MESSAGE);
+                return;
+            } catch (IllegalArgumentException ex) {
+                JOptionPane.showMessageDialog(this,
+                        "Row " + (i + 1) + ": " + ex.getMessage(),
+                        "Invalid Rate", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        }
+
+        try {
+            buyRateService.saveRules(newRules);
+            buyRatesStatusLabel.setText("Saved!");
+            buyRatesStatusLabel.setForeground(new Color(0, 150, 0));
+        } catch (IllegalArgumentException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(),
+                    "Validation Error", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private JPanel createThemeSection() {

@@ -8,6 +8,7 @@ import com.cardpricer.gui.panel.trade.TradeSummaryPanel;
 import com.cardpricer.model.Card;
 import com.cardpricer.model.ParsedCode;
 import com.cardpricer.model.TradeItem;
+import com.cardpricer.service.BuyRateService;
 import com.cardpricer.service.PricingService;
 import com.cardpricer.service.ReceiptPrintService;
 import com.cardpricer.service.ScryfallApiService;
@@ -58,6 +59,13 @@ public class TradePanel extends JPanel {
     private final ScryfallApiService apiService;
     private final TradeReceivingExportService exportService;
     private final PricingService pricingService = new PricingService();
+    private final BuyRateService buyRateService = new BuyRateService();
+    private int lastKnownBuyRateGen = BuyRateService.getSaveGeneration();
+
+    /** Last tiered credit total computed by refreshSummary(); used by saveList(). */
+    private BigDecimal lastTierCreditTotal = BigDecimal.ZERO;
+    /** Last tiered check total computed by refreshSummary(); used by saveList(). */
+    private BigDecimal lastTierCheckTotal  = BigDecimal.ZERO;
 
     private List<TradeItem> receivedCards;
     private List<String> cardConditions; // Track condition for each card
@@ -167,6 +175,18 @@ public class TradePanel extends JPanel {
         });
 
         SwingUtilities.invokeLater(() -> cardCodeField.requestFocusInWindow());
+
+        // Reload buy rates when this panel becomes visible (Preferences may have changed)
+        addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && isShowing()) {
+                int gen = BuyRateService.getSaveGeneration();
+                if (gen != lastKnownBuyRateGen) {
+                    lastKnownBuyRateGen = gen;
+                    buyRateService.reload();
+                    refreshSummary();
+                }
+            }
+        });
     }
 
     // -------------------------------------------------------------------------
@@ -786,7 +806,8 @@ public class TradePanel extends JPanel {
         panel.add(rightPanel, BorderLayout.EAST);
 
         // Highlight the initial payment rate
-        summaryPanel.update(BigDecimal.ZERO, 0, paymentTypePanel.getPaymentType());
+        summaryPanel.update(BigDecimal.ZERO, 0, paymentTypePanel.getPaymentType(),
+                BigDecimal.ZERO, BigDecimal.ZERO);
 
         return panel;
     }
@@ -1594,41 +1615,62 @@ public class TradePanel extends JPanel {
 
     /** Recomputes totals from the table and pushes updates to sub-panels. */
     private void refreshSummary() {
-        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal total       = BigDecimal.ZERO;
+        BigDecimal totalCredit = BigDecimal.ZERO;
+        BigDecimal totalCheck  = BigDecimal.ZERO;
         int totalQty = 0;
 
         int rowCount = tableModel.getRowCount();
         for (int i = 0; i < rowCount; i++) {
-            String totalStr = (String) tableModel.getValueAt(i, 6);
-            totalStr = totalStr.replace("$", "").replace(",", "").trim();
-
+            // Parse unit price (Column 5)
+            BigDecimal unitPrice;
             try {
-                BigDecimal rowTotal = new BigDecimal(totalStr);
-                total = total.add(rowTotal);
-
-                Object qtyObj = tableModel.getValueAt(i, 4);
-                int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
-                totalQty += qty;
+                String unitPriceStr = (String) tableModel.getValueAt(i, 5);
+                unitPrice = new BigDecimal(unitPriceStr.replace("$", "").replace(",", "").trim());
             } catch (Exception e) {
-                // Fallback: calculate from unit price and qty
-                try {
-                    String unitPriceStr = (String) tableModel.getValueAt(i, 5);
-                    Object qtyObj = tableModel.getValueAt(i, 4);
-                    int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
-                    BigDecimal unitPrice = new BigDecimal(unitPriceStr.replace("$", "").replace(",", "").trim());
-                    total = total.add(unitPrice.multiply(BigDecimal.valueOf(qty)));
-                    totalQty += qty;
-                } catch (Exception ex) {
-                    // Skip this row if all parsing fails
-                }
+                continue; // skip unparseable row
             }
+
+            // Parse quantity (Column 4)
+            int qty;
+            try {
+                Object qtyObj = tableModel.getValueAt(i, 4);
+                qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
+            } catch (Exception e) {
+                qty = 1;
+            }
+
+            total = total.add(unitPrice.multiply(BigDecimal.valueOf(qty)));
+            totalQty += qty;
+
+            // Look up tiered payout for this card
+            String setCode   = null;
+            String collNum   = null;
+            if (i < receivedCards.size()) {
+                com.cardpricer.model.Card card = receivedCards.get(i).getCard();
+                setCode = card.getSetCode();
+                collNum = card.getCollectorNumber();
+            }
+
+            BuyRateService.PayoutResult result =
+                    buyRateService.computePayout(setCode, collNum, unitPrice);
+            totalCredit = totalCredit.add(result.creditPayout().multiply(BigDecimal.valueOf(qty)));
+            totalCheck  = totalCheck.add(result.checkPayout().multiply(BigDecimal.valueOf(qty)));
         }
 
-        // Update PaymentTypePanel so partial split fields auto-update if visible
-        paymentTypePanel.setTotal(total);
+        // Scale accumulated payouts to 2 dp
+        totalCredit = totalCredit.setScale(2, RoundingMode.HALF_UP);
+        totalCheck  = totalCheck.setScale(2, RoundingMode.HALF_UP);
+
+        // Store for saveList() to pass to saveCardList()
+        lastTierCreditTotal = totalCredit;
+        lastTierCheckTotal  = totalCheck;
+
+        // Update PaymentTypePanel with tiered seeds for partial split
+        paymentTypePanel.setTotal(total, totalCredit, totalCheck);
 
         // Update summary labels
-        summaryPanel.update(total, totalQty, paymentTypePanel.getPaymentType());
+        summaryPanel.update(total, totalQty, paymentTypePanel.getPaymentType(), totalCredit, totalCheck);
     }
 
     // -------------------------------------------------------------------------
@@ -1862,7 +1904,7 @@ public class TradePanel extends JPanel {
         }
 
         try {
-            // Use new method with table values
+            // Use new method with table values and tiered payout totals
             String filename = exportService.saveCardList(
                     receivedCards,
                     traderName,
@@ -1874,7 +1916,9 @@ public class TradePanel extends JPanel {
                     partialCheck,
                     cardConditions,
                     unitPrices,
-                    quantities
+                    quantities,
+                    lastTierCreditTotal,
+                    lastTierCheckTotal
             );
 
             // Remember path so Print/PDF buttons can read it

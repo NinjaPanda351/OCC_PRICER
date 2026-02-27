@@ -7,14 +7,17 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 
 /**
- * Displays the running trade total and payout rates (50%, 33.33%).
- * Call update() after every table change.
+ * Displays the running trade total and effective payout rates.
+ *
+ * <p>Rates are computed dynamically from the accumulated per-row tiered payouts
+ * supplied by {@link com.cardpricer.service.BuyRateService}, rather than using
+ * flat 50% / 33% constants.  Call {@link #update} after every table change.
  */
 public class TradeSummaryPanel extends JPanel {
 
     private final JLabel totalPriceLabel;
-    private final JLabel halfRateLabel;
-    private final JLabel thirdRateLabel;
+    private final JLabel creditPayoutLabel;
+    private final JLabel checkPayoutLabel;
 
     /** Constructs the summary panel and initialises all value labels to zero. */
     public TradeSummaryPanel() {
@@ -29,53 +32,77 @@ public class TradeSummaryPanel extends JPanel {
         totalPriceLabel.setFont(totalPriceLabel.getFont().deriveFont(Font.BOLD, 18f));
         totalPriceLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        halfRateLabel = new JLabel("HALF RATE (50%): $0.00");
-        halfRateLabel.setFont(halfRateLabel.getFont().deriveFont(Font.PLAIN, 14f));
-        halfRateLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        creditPayoutLabel = new JLabel("CREDIT PAYOUT (50%): $0.00");
+        creditPayoutLabel.setFont(creditPayoutLabel.getFont().deriveFont(Font.PLAIN, 14f));
+        creditPayoutLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        thirdRateLabel = new JLabel("THIRD RATE (33.33%): $0.00");
-        thirdRateLabel.setFont(thirdRateLabel.getFont().deriveFont(Font.PLAIN, 14f));
-        thirdRateLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        checkPayoutLabel = new JLabel("CHECK PAYOUT (33%): $0.00");
+        checkPayoutLabel.setFont(checkPayoutLabel.getFont().deriveFont(Font.PLAIN, 14f));
+        checkPayoutLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         add(totalPriceLabel);
         add(Box.createVerticalStrut(8));
-        add(halfRateLabel);
+        add(creditPayoutLabel);
         add(Box.createVerticalStrut(5));
-        add(thirdRateLabel);
+        add(checkPayoutLabel);
     }
 
     /**
      * Refreshes all labels and highlights the rate that matches paymentType.
      *
-     * @param total       total market value of all cards in the trade
-     * @param totalQty    total card count across all rows
-     * @param paymentType "credit", "check", "inventory", or "partial"
+     * @param total         total market value of all cards in the trade
+     * @param totalQty      total card count across all rows
+     * @param paymentType   "credit", "check", "inventory", or "partial"
+     * @param creditPayout  accumulated credit payout from tiered rules
+     * @param checkPayout   accumulated check payout from tiered rules
      */
-    public void update(BigDecimal total, int totalQty, String paymentType) {
-        BigDecimal halfRate = total.multiply(new BigDecimal("0.50")).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal thirdRate = total.divide(new BigDecimal("3"), 2, RoundingMode.HALF_UP);
-
+    public void update(BigDecimal total, int totalQty, String paymentType,
+                       BigDecimal creditPayout, BigDecimal checkPayout) {
         totalPriceLabel.setText(String.format("TOTAL: $%.2f (%d cards)", total, totalQty));
-        halfRateLabel.setText(String.format("HALF RATE (50%%): $%.2f", halfRate));
-        thirdRateLabel.setText(String.format("THIRD RATE (33.33%%): $%.2f", thirdRate));
+
+        // Compute effective percentages for display
+        String creditPct = effectivePct(creditPayout, total);
+        String checkPct  = effectivePct(checkPayout,  total);
+
+        creditPayoutLabel.setText(String.format("CREDIT PAYOUT (%s%%): $%.2f", creditPct, creditPayout));
+        checkPayoutLabel.setText(String.format("CHECK PAYOUT (%s%%): $%.2f",  checkPct,  checkPayout));
 
         highlightPaymentRate(paymentType);
     }
 
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Computes {@code payout / total * 100} as a display string, or returns the
+     * raw payout amount string when total is zero to avoid divide-by-zero.
+     */
+    private String effectivePct(BigDecimal payout, BigDecimal total) {
+        if (total.compareTo(BigDecimal.ZERO) == 0) {
+            return "—";
+        }
+        BigDecimal pct = payout.divide(total, 4, RoundingMode.HALF_UP)
+                               .multiply(new BigDecimal("100"))
+                               .setScale(1, RoundingMode.HALF_UP);
+        // Strip trailing ".0" for clean display (e.g. "50" not "50.0")
+        String s = pct.stripTrailingZeros().toPlainString();
+        return s;
+    }
+
     private void highlightPaymentRate(String paymentType) {
         // Reset both to normal
-        halfRateLabel.setFont(halfRateLabel.getFont().deriveFont(Font.PLAIN, 14f));
-        thirdRateLabel.setFont(thirdRateLabel.getFont().deriveFont(Font.PLAIN, 14f));
-        halfRateLabel.setForeground(UIManager.getColor("Label.foreground"));
-        thirdRateLabel.setForeground(UIManager.getColor("Label.foreground"));
+        creditPayoutLabel.setFont(creditPayoutLabel.getFont().deriveFont(Font.PLAIN, 14f));
+        checkPayoutLabel.setFont(checkPayoutLabel.getFont().deriveFont(Font.PLAIN, 14f));
+        creditPayoutLabel.setForeground(UIManager.getColor("Label.foreground"));
+        checkPayoutLabel.setForeground(UIManager.getColor("Label.foreground"));
 
-        // Highlight the selected rate (none for inventory or partial mode)
         if ("credit".equals(paymentType)) {
-            halfRateLabel.setFont(halfRateLabel.getFont().deriveFont(Font.BOLD, 16f));
-            halfRateLabel.setForeground(new Color(0, 150, 0));
+            creditPayoutLabel.setFont(creditPayoutLabel.getFont().deriveFont(Font.BOLD, 16f));
+            creditPayoutLabel.setForeground(new Color(0, 150, 0));
         } else if ("check".equals(paymentType)) {
-            thirdRateLabel.setFont(thirdRateLabel.getFont().deriveFont(Font.BOLD, 16f));
-            thirdRateLabel.setForeground(new Color(0, 150, 0));
+            checkPayoutLabel.setFont(checkPayoutLabel.getFont().deriveFont(Font.BOLD, 16f));
+            checkPayoutLabel.setForeground(new Color(0, 150, 0));
         }
     }
 }

@@ -30,6 +30,11 @@ public class PaymentTypePanel extends JPanel {
     /** Current trade total, updated via setTotal(). */
     private BigDecimal currentTotal = BigDecimal.ZERO;
 
+    /** Tiered credit seed for partial split; null → equal split fallback. */
+    private BigDecimal pendingCreditSeed = null;
+    /** Tiered check seed for partial split; null → equal split fallback. */
+    private BigDecimal pendingCheckSeed  = null;
+
     private final Runnable onSelectionChanged;
 
     /**
@@ -46,8 +51,8 @@ public class PaymentTypePanel extends JPanel {
         JPanel radioPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 0));
 
         ButtonGroup paymentGroup = new ButtonGroup();
-        storeCreditRadio = new JRadioButton("Store Credit (50%)");
-        checkRadio = new JRadioButton("Check (33.33%)");
+        storeCreditRadio = new JRadioButton("Store Credit");
+        checkRadio = new JRadioButton("Check");
         inventoryRadio = new JRadioButton("Inventory (No Payout)");
         partialRadio = new JRadioButton("Partial (Split Payment)");
 
@@ -115,9 +120,30 @@ public class PaymentTypePanel extends JPanel {
     /**
      * Supplies the current trade total so split fields can auto-populate when
      * the user selects the Partial option.
+     * Delegates to {@link #setTotal(BigDecimal, BigDecimal, BigDecimal)} with
+     * {@code null} seeds (falls back to equal-split behaviour).
      */
     public void setTotal(BigDecimal total) {
-        this.currentTotal = total;
+        setTotal(total, null, null);
+    }
+
+    /**
+     * Supplies the current trade total along with tiered payout seeds.
+     *
+     * <p>When the Partial radio is selected and the split panel is visible, the
+     * credit and check fields are pre-populated with {@code creditSeed} /
+     * {@code checkSeed} respectively (the tiered payout amounts computed by
+     * {@link com.cardpricer.service.BuyRateService}).  If either seed is
+     * {@code null} the method falls back to an equal-split of the total.
+     *
+     * @param total      current total market value
+     * @param creditSeed tiered credit payout suggestion, or {@code null}
+     * @param checkSeed  tiered check payout suggestion, or {@code null}
+     */
+    public void setTotal(BigDecimal total, BigDecimal creditSeed, BigDecimal checkSeed) {
+        this.currentTotal  = total;
+        this.pendingCreditSeed = creditSeed;
+        this.pendingCheckSeed  = checkSeed;
         if (partialRadio.isSelected() && partialPaymentPanel.isVisible()) {
             updatePartialSplit();
         }
@@ -188,11 +214,17 @@ public class PaymentTypePanel extends JPanel {
     }
 
     private void updatePartialSplit() {
-        // Auto-calculate 50/50 split of current total
         try {
-            BigDecimal half = currentTotal.divide(new BigDecimal("2"), 2, RoundingMode.HALF_UP);
-            partialCreditField.setText(String.format("%.2f", half));
-            partialCheckField.setText(String.format("%.2f", half));
+            if (pendingCreditSeed != null && pendingCheckSeed != null) {
+                // Use tiered payout seeds from BuyRateService
+                partialCreditField.setText(String.format("%.2f", pendingCreditSeed));
+                partialCheckField.setText(String.format("%.2f", pendingCheckSeed));
+            } else {
+                // Fallback: equal 50/50 split of total
+                BigDecimal half = currentTotal.divide(new BigDecimal("2"), 2, RoundingMode.HALF_UP);
+                partialCreditField.setText(String.format("%.2f", half));
+                partialCheckField.setText(String.format("%.2f", half));
+            }
             updatePartialTotal();
         } catch (Exception e) {
             partialCreditField.setText("0.00");

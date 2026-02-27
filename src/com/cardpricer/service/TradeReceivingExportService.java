@@ -184,12 +184,15 @@ public class TradeReceivingExportService {
      * @param conditions           list of condition strings for each card
      * @param unitPrices           actual unit prices from the table (already condition-adjusted)
      * @param quantities           actual quantities from the table
+     * @param tierCreditTotal      accumulated tiered credit payout (used for credit/check receipt lines)
+     * @param tierCheckTotal       accumulated tiered check payout (used for credit/check receipt lines)
      * @return the filename of the saved list
      */
     public String saveCardList(List<TradeItem> items, String traderName, String customerName,
                                String driversLicense, String checkNumber, String paymentType,
                                BigDecimal partialCreditAmount, BigDecimal partialCheckAmount,
-                               List<String> conditions, List<BigDecimal> unitPrices, List<Integer> quantities) throws IOException {
+                               List<String> conditions, List<BigDecimal> unitPrices, List<Integer> quantities,
+                               BigDecimal tierCreditTotal, BigDecimal tierCheckTotal) throws IOException {
         ensureDataDirectoryExists();
 
         // New format: YYYY-MM-DD_HH-MM-SS_CUSTOMER_NAME
@@ -225,6 +228,8 @@ public class TradeReceivingExportService {
             writer.printf("Total Value: $%.2f%n", totalValue);
 
             // Payment method and payout breakdown
+            BigDecimal safeCredit = tierCreditTotal != null ? tierCreditTotal : BigDecimal.ZERO;
+            BigDecimal safeCheck  = tierCheckTotal  != null ? tierCheckTotal  : BigDecimal.ZERO;
             switch (paymentType) {
                 case "partial":
                     BigDecimal safeCreditAmt = partialCreditAmount != null ? partialCreditAmount : BigDecimal.ZERO;
@@ -238,9 +243,8 @@ public class TradeReceivingExportService {
                     }
                     break;
                 case "check":
-                    writer.println("Payment Method: Check (33.33%)");
-                    writer.printf("Payout: $%.2f%n",
-                            totalValue.multiply(CardConstants.PAYMENT_RATE_CHECK).setScale(2, java.math.RoundingMode.HALF_UP));
+                    writer.println("Payment Method: Check");
+                    writer.printf("Payout: $%.2f%n", safeCheck);
                     if (checkNumber != null && !checkNumber.isEmpty()) {
                         writer.println("Check Number: " + checkNumber);
                     }
@@ -249,9 +253,8 @@ public class TradeReceivingExportService {
                     writer.println("Payment Method: Inventory (No Payout)");
                     break;
                 default: // "credit"
-                    writer.println("Payment Method: Store Credit (50%)");
-                    writer.printf("Payout: $%.2f%n",
-                            totalValue.multiply(CardConstants.PAYMENT_RATE_CREDIT).setScale(2, java.math.RoundingMode.HALF_UP));
+                    writer.println("Payment Method: Store Credit");
+                    writer.printf("Payout: $%.2f%n", safeCredit);
                     break;
             }
 
