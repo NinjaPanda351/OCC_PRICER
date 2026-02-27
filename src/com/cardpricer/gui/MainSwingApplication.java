@@ -13,6 +13,9 @@ import com.formdev.flatlaf.FlatDarkLaf;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.util.prefs.Preferences;
 
 /**
  * Application entry point and main frame for OCC Card Pricer.
@@ -64,7 +67,22 @@ public class MainSwingApplication {
 
     private void start() {
         frame = new JFrame("OCC Card Pricer & Trading Platform");
-        frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+        frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+        frame.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                if (tradePanel instanceof TradePanel tp && tp.hasUnsavedCards()) {
+                    int choice = JOptionPane.showConfirmDialog(frame,
+                            "You have unsaved cards in the trade panel.\nExit anyway?",
+                            "Unsaved Trade",
+                            JOptionPane.YES_NO_OPTION,
+                            JOptionPane.WARNING_MESSAGE);
+                    if (choice != JOptionPane.YES_OPTION) return;
+                }
+                frame.dispose();
+                System.exit(0);
+            }
+        });
         frame.setMinimumSize(new Dimension(1100, 650));
 
         // Root layout
@@ -220,9 +238,45 @@ public class MainSwingApplication {
         JLabel version = new JLabel("v" + AppVersion.CURRENT);
         version.setForeground(UIManager.getColor("Label.disabledForeground"));
 
+        // F8: Theme toggle button (☀ = switch to light, 🌙 = switch to dark)
+        JButton themeToggleBtn = new JButton(isDarkTheme() ? "\u2600" : "\uD83C\uDF19");
+        themeToggleBtn.setFocusPainted(false);
+        themeToggleBtn.setToolTipText("Toggle dark/light theme");
+        themeToggleBtn.setPreferredSize(new Dimension(32, 24));
+        themeToggleBtn.setMargin(new Insets(0, 4, 0, 4));
+        themeToggleBtn.addActionListener(e -> {
+            toggleTheme();
+            themeToggleBtn.setText(isDarkTheme() ? "\u2600" : "\uD83C\uDF19");
+        });
+
+        JPanel eastPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        eastPanel.setOpaque(false);
+        eastPanel.add(themeToggleBtn);
+        eastPanel.add(version);
+
         status.add(statusLabel, BorderLayout.WEST);
-        status.add(version, BorderLayout.EAST);
+        status.add(eastPanel, BorderLayout.EAST);
         return status;
+    }
+
+    /** Returns {@code true} if the currently saved theme is a dark theme. */
+    private boolean isDarkTheme() {
+        String theme = PreferencesPanel.getSavedTheme().toLowerCase();
+        return theme.contains("dark") || theme.contains("dracula") || theme.contains("carbon")
+                || theme.contains("midnight") || theme.contains("monokai") || theme.contains("monocai")
+                || theme.contains("nord") || theme.contains("cobalt") || theme.contains("gradianto")
+                || theme.contains("gruvbox") || theme.contains("spacegray") || theme.contains("hiberbee")
+                || theme.contains("vuesion");
+    }
+
+    /** Toggles between FlatLaf Light and FlatLaf Dark, persisting the choice. */
+    private void toggleTheme() {
+        String next = isDarkTheme() ? "FlatLaf Light" : "FlatLaf Dark";
+        Preferences.userNodeForPackage(PreferencesPanel.class).put("app.theme", next);
+        PreferencesPanel.applyThemeByName(next);
+        for (Window w : Window.getWindows()) {
+            SwingUtilities.updateComponentTreeUI(w);
+        }
     }
 
     private JPanel createHomeScreen() {

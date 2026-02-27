@@ -13,13 +13,18 @@ import com.cardpricer.service.PricingService;
 import com.cardpricer.service.ReceiptPrintService;
 import com.cardpricer.service.ScryfallApiService;
 import com.cardpricer.service.TradeReceivingExportService;
+import com.cardpricer.service.TradeSessionService;
 import com.cardpricer.util.CardCodeParser;
 import com.cardpricer.util.CardConstants;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.event.ChangeEvent;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.event.TableColumnModelEvent;
+import javax.swing.event.TableColumnModelListener;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.ActionEvent;
@@ -35,6 +40,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.prefs.Preferences;
 
 /**
  * Quick-entry panel for receiving cards from trades and purchases.
@@ -65,6 +71,7 @@ public class TradePanel extends JPanel {
         {"+ / Numpad +",   "Duplicate the selected row"},
         {"Ctrl+Z",         "Undo the last added card"},
         {"Ctrl+F / F2",    "Search for a card by name"},
+        {"/",              "Jump to card code field"},
         {"F1 / [?]",       "Show this help dialog"},
         {"--- Code Formats", ""},
         {"TDM 3",          "Normal finish (set code + number)"},
@@ -88,6 +95,8 @@ public class TradePanel extends JPanel {
 
     private List<TradeItem> receivedCards;
     private List<String> cardConditions; // Track condition for each card
+    private final List<BuyRateService.PayoutResult> rowPayouts = new ArrayList<>();
+    private boolean isRefreshingSummary = false;
 
     // Input field
     private JTextField cardCodeField;
@@ -123,6 +132,9 @@ public class TradePanel extends JPanel {
     private String lastSavedTxtPath = null;
     private JButton printReceiptBtn;
     private JButton savePdfBtn;
+
+    // ── Feature: Autosave ─────────────────────────────────────────────────────
+    private Timer autosaveTimer;
 
     // ── Feature: Undo ────────────────────────────────────────────────────────
     private TradeItem lastAddedItem = null;
@@ -197,7 +209,22 @@ public class TradePanel extends JPanel {
             }
         });
 
+        // / → jump to card code field
+        panelIM.put(KeyStroke.getKeyStroke('/'), "focusCodeField");
+        panelAM.put("focusCodeField", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                cardCodeField.requestFocusInWindow();
+            }
+        });
+
         SwingUtilities.invokeLater(() -> cardCodeField.requestFocusInWindow());
+
+        // F5: offer crash-recovery restore, then start 60-second autosave timer
+        SwingUtilities.invokeLater(this::offerSessionRestore);
+        autosaveTimer = new Timer(60_000, e -> performAutosave());
+        autosaveTimer.setRepeats(true);
+        autosaveTimer.start();
 
         // Reload buy rates when this panel becomes visible (Preferences may have changed)
         addHierarchyListener(e -> {
@@ -358,8 +385,8 @@ public class TradePanel extends JPanel {
     private JPanel createTablePanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
-        // Table with checkbox, Condition, Qty, Unit Price, and Total columns
-        String[] columns = {"☑", "Code", "Card Name", "Condition", "Qty", "Unit Price", "Total"};
+        // Table with checkbox, Condition, Qty, Unit Price, Total, and Rate columns
+        String[] columns = {"☑", "Code", "Card Name", "Condition", "Qty", "Unit Price", "Total", "Rate"};
         tableModel = new DefaultTableModel(columns, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -391,6 +418,7 @@ public class TradePanel extends JPanel {
         cardTable.getColumnModel().getColumn(4).setPreferredWidth(60);  // Qty
         cardTable.getColumnModel().getColumn(5).setPreferredWidth(100); // Unit Price
         cardTable.getColumnModel().getColumn(6).setPreferredWidth(100); // Total
+        cardTable.getColumnModel().getColumn(7).setPreferredWidth(110); // Rate
 
         // Click anywhere on row to select it and check its checkbox
         cardTable.addMouseListener(new MouseAdapter() {
@@ -444,6 +472,7 @@ public class TradePanel extends JPanel {
         // Numeric price comparator for the Unit Price column (column 5) and Total column (column 6)
         sorter.setComparator(5, PRICE_COMPARATOR);
         sorter.setComparator(6, PRICE_COMPARATOR);
+        sorter.setSortable(7, false);
 
         // Set up condition dropdown
         JComboBox<String> conditionCombo = new JComboBox<>(CardConstants.CONDITIONS);
@@ -614,6 +643,30 @@ public class TradePanel extends JPanel {
         };
         cardTable.getColumnModel().getColumn(5).setCellEditor(priceEditor);
 
+        // F1+F2: Register bounty-aware renderer on all non-checkbox columns (cols 1–7)
+        BountyAwareRenderer bountyRenderer = new BountyAwareRenderer();
+        for (int c = 1; c <= 7; c++) {
+            cardTable.getColumnModel().getColumn(c).setCellRenderer(bountyRenderer);
+        }
+
+        // F7: Restore saved column widths from preferences
+        restoreColumnWidths();
+
+        // F7: Persist column widths whenever the user resizes a column
+        cardTable.getColumnModel().addColumnModelListener(new TableColumnModelListener() {
+            @Override public void columnMarginChanged(ChangeEvent e) {
+                Preferences prefs = Preferences.userNodeForPackage(PreferencesPanel.class);
+                for (int i = 0; i < cardTable.getColumnCount(); i++) {
+                    prefs.putInt("trade.table.col." + i,
+                            cardTable.getColumnModel().getColumn(i).getWidth());
+                }
+            }
+            @Override public void columnAdded(TableColumnModelEvent e) {}
+            @Override public void columnRemoved(TableColumnModelEvent e) {}
+            @Override public void columnMoved(TableColumnModelEvent e) {}
+            @Override public void columnSelectionChanged(javax.swing.event.ListSelectionEvent e) {}
+        });
+
         // Add table model listener to recalculate on qty or price change
         tableModel.addTableModelListener(e -> {
             int column = e.getColumn();
@@ -660,6 +713,7 @@ public class TradePanel extends JPanel {
                 if (confirm == JOptionPane.YES_OPTION) {
                     receivedCards.remove(modelRow);
                     cardConditions.remove(modelRow);
+                    if (modelRow < rowPayouts.size()) rowPayouts.remove(modelRow);
                     tableModel.removeRow(modelRow);
                     clearUndoState();
                     refreshSummary();
@@ -1016,7 +1070,8 @@ public class TradePanel extends JPanel {
                     "NM",
                     1,      // Default qty = 1
                     String.format("$%.2f", price), // Unit price
-                    String.format("$%.2f", price)  // Total
+                    String.format("$%.2f", price), // Total
+                    ""      // Rate placeholder
             });
 
             // Create a dummy TradeItem to keep receivedCards in sync
@@ -1030,6 +1085,7 @@ public class TradePanel extends JPanel {
             TradeItem item = new TradeItem(miscCard, false, 1);
             receivedCards.add(item);
             cardConditions.add("NM");
+            rowPayouts.add(null);
 
             refreshSummary();
 
@@ -1209,7 +1265,8 @@ public class TradePanel extends JPanel {
                     "NM",
                     1,      // Default qty = 1
                     String.format("$%.2f", price), // Unit price
-                    String.format("$%.2f", price)  // Total
+                    String.format("$%.2f", price), // Total
+                    ""      // Rate placeholder
             });
 
             // Create a dummy TradeItem to keep receivedCards in sync
@@ -1223,6 +1280,7 @@ public class TradePanel extends JPanel {
             TradeItem item = new TradeItem(miscCard, false, 1);
             receivedCards.add(item);
             cardConditions.add("NM");
+            rowPayouts.add(null);
 
             refreshSummary();
 
@@ -1416,6 +1474,7 @@ public class TradePanel extends JPanel {
         TradeItem item = new TradeItem(previewCard, isFoil, 1, previewFinish);
         receivedCards.add(item);
         cardConditions.add("NM"); // Default to NM condition
+        rowPayouts.add(null); // placeholder; overwritten immediately by refreshSummary()
 
         Card card = item.getCard();
         // For PLST cards, display "PLST ARB 1" in the table; saves use the underlying "ARB 1"
@@ -1453,7 +1512,8 @@ public class TradePanel extends JPanel {
                 "NM", // Default condition
                 1,    // Default qty = 1
                 String.format("$%.2f", roundedPrice), // Unit price
-                String.format("$%.2f", roundedPrice)  // Total (qty * unit price)
+                String.format("$%.2f", roundedPrice), // Total (qty * unit price)
+                ""    // Rate placeholder; set by refreshSummary()
         });
 
         refreshSummary();
@@ -1484,6 +1544,7 @@ public class TradePanel extends JPanel {
         if (row >= 0 && row < tableModel.getRowCount()) {
             receivedCards.remove(row);
             cardConditions.remove(row);
+            if (row < rowPayouts.size()) rowPayouts.remove(row);
             tableModel.removeRow(row);
         }
         clearUndoState();
@@ -1542,6 +1603,7 @@ public class TradePanel extends JPanel {
         // Add to lists
         receivedCards.add(newItem);
         cardConditions.add(condition);
+        rowPayouts.add(null); // placeholder; overwritten by refreshSummary()
 
         // Add to table
         tableModel.addRow(new Object[]{
@@ -1551,7 +1613,8 @@ public class TradePanel extends JPanel {
                 condition,
                 qty,
                 unitPrice,
-                String.format("$%.2f", total)
+                String.format("$%.2f", total),
+                ""      // Rate placeholder
         });
 
         refreshSummary();
@@ -1604,6 +1667,7 @@ public class TradePanel extends JPanel {
                 int row = rowsToDelete.get(i);
                 receivedCards.remove(row);
                 cardConditions.remove(row);
+                if (row < rowPayouts.size()) rowPayouts.remove(row);
                 tableModel.removeRow(row);
             }
             clearUndoState();
@@ -1647,12 +1711,34 @@ public class TradePanel extends JPanel {
 
     /** Recomputes totals from the table and pushes updates to sub-panels. */
     private void refreshSummary() {
+        if (isRefreshingSummary) return;
+        isRefreshingSummary = true;
+        try {
+            refreshSummaryImpl();
+        } finally {
+            isRefreshingSummary = false;
+        }
+    }
+
+    private void refreshSummaryImpl() {
+        // Reload buy rates if Preferences changed them since the last refresh
+        int gen = BuyRateService.getSaveGeneration();
+        if (gen != lastKnownBuyRateGen) {
+            lastKnownBuyRateGen = gen;
+            buyRateService.reload();
+        }
+
         BigDecimal total       = BigDecimal.ZERO;
         BigDecimal totalCredit = BigDecimal.ZERO;
         BigDecimal totalCheck  = BigDecimal.ZERO;
         int totalQty = 0;
 
         int rowCount = tableModel.getRowCount();
+
+        // Sync rowPayouts size to match current row count
+        while (rowPayouts.size() < rowCount) rowPayouts.add(null);
+        while (rowPayouts.size() > rowCount) rowPayouts.remove(rowPayouts.size() - 1);
+
         for (int i = 0; i < rowCount; i++) {
             // Parse unit price (Column 5)
             BigDecimal unitPrice;
@@ -1690,6 +1776,15 @@ public class TradePanel extends JPanel {
                     buyRateService.computePayout(setCode, collNum, cardName, unitPrice);
             totalCredit = totalCredit.add(result.creditPayout().multiply(BigDecimal.valueOf(qty)));
             totalCheck  = totalCheck.add(result.checkPayout().multiply(BigDecimal.valueOf(qty)));
+
+            // Store result for bounty tint renderer and update Rate column (col 7)
+            rowPayouts.set(i, result);
+            String creditPct = String.format("%.0f",
+                    result.appliedCreditRate().multiply(new BigDecimal("100")));
+            String checkPct  = String.format("%.0f",
+                    result.appliedCheckRate().multiply(new BigDecimal("100")));
+            String rateStr   = (result.isBounty() ? "\u2605 " : "") + creditPct + "% / " + checkPct + "%";
+            tableModel.setValueAt(rateStr, i, 7);
         }
 
         // Scale accumulated payouts to 2 dp
@@ -1705,6 +1800,10 @@ public class TradePanel extends JPanel {
 
         // Update summary labels
         summaryPanel.update(total, totalQty, paymentTypePanel.getPaymentType(), totalCredit, totalCheck);
+
+        // Repaint the whole table so the BountyAwareRenderer can apply gold tints
+        // to ALL columns (not just col 7 which gets a cell-update event each iteration).
+        if (cardTable != null) cardTable.repaint();
     }
 
     // -------------------------------------------------------------------------
@@ -1724,11 +1823,13 @@ public class TradePanel extends JPanel {
         if (result == JOptionPane.YES_OPTION) {
             receivedCards.clear();
             cardConditions.clear();
+            rowPayouts.clear();
             tableModel.setRowCount(0);
             clearUndoState();
             lastSavedTxtPath = null;
             if (printReceiptBtn != null) printReceiptBtn.setEnabled(false);
             if (savePdfBtn != null) savePdfBtn.setEnabled(false);
+            TradeSessionService.clearAutosave();
             refreshSummary();
             cardCodeField.requestFocusInWindow();
         }
@@ -1959,6 +2060,8 @@ public class TradePanel extends JPanel {
             lastSavedTxtPath = filename;
             if (printReceiptBtn != null) printReceiptBtn.setEnabled(true);
             if (savePdfBtn != null) savePdfBtn.setEnabled(true);
+
+            TradeSessionService.clearAutosave();
 
             JOptionPane.showMessageDialog(getParentWindow(),
                     String.format("Card list saved!\n\nFile: %s", filename),
@@ -2192,5 +2295,142 @@ public class TradePanel extends JPanel {
             @Override public void removeUpdate(DocumentEvent e)  { field.setBorder(original); }
             @Override public void changedUpdate(DocumentEvent e) {}
         });
+    }
+
+    // -------------------------------------------------------------------------
+    // F10: Unsaved-trade check for window-close confirmation
+    // -------------------------------------------------------------------------
+
+    /** Returns {@code true} if there are cards in the table that have not been saved. */
+    public boolean hasUnsavedCards() {
+        return !receivedCards.isEmpty();
+    }
+
+    // -------------------------------------------------------------------------
+    // F7: Column width memory
+    // -------------------------------------------------------------------------
+
+    /** Restores saved column widths from Preferences. */
+    private void restoreColumnWidths() {
+        Preferences prefs = Preferences.userNodeForPackage(PreferencesPanel.class);
+        for (int i = 0; i < cardTable.getColumnCount(); i++) {
+            int w = prefs.getInt("trade.table.col." + i, -1);
+            if (w > 0) cardTable.getColumnModel().getColumn(i).setPreferredWidth(w);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // F5: Autosave / crash recovery
+    // -------------------------------------------------------------------------
+
+    /** Offers to restore a previously crashed session (called on first EDT tick). */
+    private void offerSessionRestore() {
+        if (!TradeSessionService.hasAutosave()) return;
+        int choice = JOptionPane.showConfirmDialog(getParentWindow(),
+                "An unsaved trade session was found.\nWould you like to restore it?",
+                "Restore Session",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE);
+        if (choice == JOptionPane.YES_OPTION) {
+            TradeSessionService.SavedSession session = TradeSessionService.load();
+            if (session != null) restoreSession(session);
+        } else {
+            TradeSessionService.clearAutosave();
+        }
+    }
+
+    /** Restores a previously saved session into the trade table. */
+    private void restoreSession(TradeSessionService.SavedSession session) {
+        if (session == null) return;
+        if (session.traderName() != null) traderNameField.setText(session.traderName());
+        if (session.customerName() != null) customerNameField.setText(session.customerName());
+
+        for (TradeSessionService.SessionRow row : session.rows()) {
+            String[] codeParts = row.code().split(" ", 2);
+            String setCode = codeParts.length > 0 ? codeParts[0] : "MISC";
+            String collNum = codeParts.length > 1 ? codeParts[1] : "1";
+
+            Card stub = new Card();
+            stub.setName(row.cardName());
+            stub.setSetCode(setCode);
+            stub.setCollectorNumber(collNum);
+            stub.setRarity("common");
+            stub.setPrice(row.unitPrice().toPlainString());
+
+            TradeItem item = new TradeItem(stub, false, row.qty());
+            item.setUnitPrice(row.unitPrice());
+            item.setQuantity(row.qty());
+
+            receivedCards.add(item);
+            cardConditions.add(row.condition());
+            rowPayouts.add(null);
+
+            BigDecimal total = row.unitPrice().multiply(BigDecimal.valueOf(row.qty()));
+            tableModel.addRow(new Object[]{
+                    false,
+                    row.code(),
+                    row.cardName(),
+                    row.condition(),
+                    row.qty(),
+                    String.format("$%.2f", row.unitPrice()),
+                    String.format("$%.2f", total),
+                    ""
+            });
+        }
+        refreshSummary();
+    }
+
+    /** Writes current table contents to the autosave file. */
+    private void performAutosave() {
+        if (tableModel.getRowCount() == 0) {
+            TradeSessionService.clearAutosave();
+            return;
+        }
+        List<TradeSessionService.SessionRow> rows = new ArrayList<>();
+        for (int i = 0; i < tableModel.getRowCount(); i++) {
+            String code = (String) tableModel.getValueAt(i, 1);
+            String cardName = (String) tableModel.getValueAt(i, 2);
+            String condition = (String) tableModel.getValueAt(i, 3);
+            Object qtyObj = tableModel.getValueAt(i, 4);
+            int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
+            String priceStr = ((String) tableModel.getValueAt(i, 5))
+                    .replace("$", "").replace(",", "").trim();
+            BigDecimal unitPrice;
+            try { unitPrice = new BigDecimal(priceStr); } catch (Exception e) { continue; }
+            rows.add(new TradeSessionService.SessionRow(code, cardName, condition, qty, unitPrice));
+        }
+        TradeSessionService.save(
+                traderNameField.getText().trim(),
+                customerNameField.getText().trim(),
+                rows);
+    }
+
+    // -------------------------------------------------------------------------
+    // F1+F2: Bounty-aware row tint renderer
+    // -------------------------------------------------------------------------
+
+    /**
+     * Renders table cells with a gold background for rows whose payout came from a bounty override.
+     */
+    private class BountyAwareRenderer extends DefaultTableCellRenderer {
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value,
+                boolean isSelected, boolean hasFocus, int row, int column) {
+            Component c = super.getTableCellRendererComponent(
+                    table, value, isSelected, hasFocus, row, column);
+            if (!isSelected) {
+                int modelRow = table.convertRowIndexToModel(row);
+                if (modelRow >= 0 && modelRow < rowPayouts.size()
+                        && rowPayouts.get(modelRow) != null
+                        && rowPayouts.get(modelRow).isBounty()) {
+                    c.setBackground(new Color(42, 122, 122));
+                    c.setForeground(Color.WHITE);
+                } else {
+                    c.setBackground(table.getBackground());
+                    c.setForeground(table.getForeground());
+                }
+            }
+            return c;
+        }
     }
 }

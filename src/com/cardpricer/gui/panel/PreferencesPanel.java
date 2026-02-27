@@ -48,6 +48,7 @@ public class PreferencesPanel extends JPanel {
         {"Import CSV",      "Bulk-import bounties: CARD NAME,CREDIT%,CHECK%"},
         {"Import and Add",  "Merge CSV rows — existing names overwritten"},
         {"Import and Replace", "Clear all bounties first, then import"},
+        {"Export CSV",      "Export current bounty table to a CSV file"},
         {"Save Bounties",   "Persist bounty changes to disk"},
     };
 
@@ -416,6 +417,7 @@ public class PreferencesPanel extends JPanel {
         JButton addBountyBtn    = new JButton("Add Bounty");
         JButton removeBountyBtn = new JButton("Remove Selected");
         JButton importCsvBtn    = new JButton("Import CSV");
+        JButton exportCsvBtn    = new JButton("Export CSV");
         JButton saveBountiesBtn = new JButton("Save Bounties");
 
         bountiesStatusLabel = new JLabel(" ");
@@ -431,11 +433,13 @@ public class PreferencesPanel extends JPanel {
             }
         });
         importCsvBtn.addActionListener(e -> importBountyCsv());
+        exportCsvBtn.addActionListener(e -> exportBountiesCsv());
         saveBountiesBtn.addActionListener(e -> saveBounties());
 
         bountyBtns.add(addBountyBtn);
         bountyBtns.add(removeBountyBtn);
         bountyBtns.add(importCsvBtn);
+        bountyBtns.add(exportCsvBtn);
         bountyBtns.add(saveBountiesBtn);
         bountyBtns.add(bountiesStatusLabel);
         bountySection.add(bountyBtns, BorderLayout.SOUTH);
@@ -569,6 +573,34 @@ public class PreferencesPanel extends JPanel {
                     "Invalid Input", JOptionPane.WARNING_MESSAGE);
             return;
         }
+
+        // F4: Check for duplicate name (case-insensitive)
+        int existingRow = -1;
+        for (int r = 0; r < bountyTableModel.getRowCount(); r++) {
+            String existing = ((String) bountyTableModel.getValueAt(r, 0)).trim();
+            if (existing.equalsIgnoreCase(name)) {
+                existingRow = r;
+                break;
+            }
+        }
+        if (existingRow >= 0) {
+            int overwrite = JOptionPane.showConfirmDialog(this,
+                    "A bounty for \"" + name + "\" already exists.\nOverwrite it?",
+                    "Duplicate Bounty",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE);
+            if (overwrite == JOptionPane.YES_OPTION) {
+                bountyTableModel.setValueAt(name,                      existingRow, 0);
+                bountyTableModel.setValueAt(creditField.getText().trim(), existingRow, 1);
+                bountyTableModel.setValueAt(checkField.getText().trim(),  existingRow, 2);
+                bountyTable.setRowSelectionInterval(existingRow, existingRow);
+                bountyTable.scrollRectToVisible(bountyTable.getCellRect(existingRow, 0, true));
+                bountiesStatusLabel.setText("Row updated — click Save Bounties to persist.");
+                bountiesStatusLabel.setForeground(UIManager.getColor("Label.foreground"));
+            }
+            return;
+        }
+
         bountyTableModel.addRow(new String[]{name, creditField.getText().trim(), checkField.getText().trim()});
         int newRow = bountyTableModel.getRowCount() - 1;
         bountyTable.setRowSelectionInterval(newRow, newRow);
@@ -679,8 +711,46 @@ public class PreferencesPanel extends JPanel {
             }
         }
         buyRateService.saveBounties(newBounties);
-        bountiesStatusLabel.setText("Saved!");
+        loadBountiesIntoTable();
+        bountiesStatusLabel.setText("Saved & sorted alphabetically.");
         bountiesStatusLabel.setForeground(new Color(0, 150, 0));
+    }
+
+    /** Exports the current bounty table contents to a user-chosen CSV file. */
+    private void exportBountiesCsv() {
+        if (bountyTableModel.getRowCount() == 0) {
+            JOptionPane.showMessageDialog(this, "No bounties to export.",
+                    "Export CSV", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Export Bounties CSV");
+        chooser.setSelectedFile(new File("bounties.csv"));
+        chooser.setFileFilter(new FileNameExtensionFilter("CSV files (*.csv)", "csv"));
+        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
+
+        File file = chooser.getSelectedFile();
+        if (!file.getName().toLowerCase().endsWith(".csv")) {
+            file = new File(file.getAbsolutePath() + ".csv");
+        }
+
+        StringBuilder sb = new StringBuilder("CARD NAME,CREDIT PERCENT,CHECK PERCENT\n");
+        for (int i = 0; i < bountyTableModel.getRowCount(); i++) {
+            String name   = ((String) bountyTableModel.getValueAt(i, 0)).replace(",", ";");
+            String credit = (String) bountyTableModel.getValueAt(i, 1);
+            String check  = (String) bountyTableModel.getValueAt(i, 2);
+            sb.append(name).append(',').append(credit).append(',').append(check).append('\n');
+        }
+
+        try {
+            Files.writeString(file.toPath(), sb.toString(), java.nio.charset.StandardCharsets.UTF_8);
+            bountiesStatusLabel.setText("Exported to " + file.getName());
+            bountiesStatusLabel.setForeground(new Color(0, 150, 0));
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "Export failed: " + ex.getMessage(),
+                    "Export Error", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private JPanel createThemeSection() {
@@ -794,7 +864,7 @@ public class PreferencesPanel extends JPanel {
      *
      * @param themeName display name of the theme to apply
      */
-    private static void applyThemeByName(String themeName) {
+    public static void applyThemeByName(String themeName) {
         ThemeApplier applier = THEME_REGISTRY.getOrDefault(themeName, FlatDarkLaf::setup);
         try {
             applier.apply();

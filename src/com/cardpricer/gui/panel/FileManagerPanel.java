@@ -21,7 +21,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Panel for browsing, downloading, printing, and deleting generated data files.
@@ -66,8 +68,18 @@ public class FileManagerPanel extends JPanel {
     private DefaultTableModel historyTableModel;
     private JTextArea historyPreviewArea;
     private JTextField historySearchField;
+    private JComboBox<String> historyPaymentCombo;   // F12
     private JLabel historyStatusLabel;
     private List<TradeRecord> allRecords = new ArrayList<>();
+
+    // F11: Content cache for full-text search
+    private final Map<String, String> contentCache = new HashMap<>();
+
+    // F13: Stats bar labels
+    private JLabel historyStatsTotalTrades;
+    private JLabel historyStatsTotalCards;
+    private JLabel historyStatsTotalValue;
+    private JLabel historyStatsAvgValue;
 
     private static final DateTimeFormatter HISTORY_DATE_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
@@ -447,8 +459,9 @@ public class FileManagerPanel extends JPanel {
 
         // ── Top: filter row ──────────────────────────────────────────────────
         JPanel filterRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 4));
-        filterRow.add(new JLabel("Filter by customer:"));
+        filterRow.add(new JLabel("Search:"));
         historySearchField = new JTextField(20);
+        historySearchField.setToolTipText("Filter by customer, date, or receipt body text");
         historySearchField.getDocument().addDocumentListener(
                 new javax.swing.event.DocumentListener() {
                     public void insertUpdate(javax.swing.event.DocumentEvent e) { applyHistoryFilter(); }
@@ -456,6 +469,12 @@ public class FileManagerPanel extends JPanel {
                     public void changedUpdate(javax.swing.event.DocumentEvent e) {}
                 });
         filterRow.add(historySearchField);
+
+        // F12: Payment type filter
+        filterRow.add(new JLabel("  Payment:"));
+        historyPaymentCombo = new JComboBox<>(new String[]{"All", "Credit", "Check", "Partial", "Inventory"});
+        historyPaymentCombo.addActionListener(e -> applyHistoryFilter());
+        filterRow.add(historyPaymentCombo);
 
         JButton refreshBtn = new JButton("Refresh");
         refreshBtn.setFocusPainted(false);
@@ -531,21 +550,65 @@ public class FileManagerPanel extends JPanel {
         split.setResizeWeight(0.45);
         tab.add(split, BorderLayout.CENTER);
 
+        // ── F13: Stats bar ────────────────────────────────────────────────────
+        historyStatsTotalTrades = new JLabel("Trades: 0");
+        historyStatsTotalCards  = new JLabel("  Cards: 0");
+        historyStatsTotalValue  = new JLabel("  Total: $0.00");
+        historyStatsAvgValue    = new JLabel("  Avg: $0.00");
+
+        Font statsFont = historyStatsTotalTrades.getFont().deriveFont(12f);
+        Color statsFg  = UIManager.getColor("Label.disabledForeground");
+        for (JLabel lbl : new JLabel[]{
+                historyStatsTotalTrades, historyStatsTotalCards,
+                historyStatsTotalValue, historyStatsAvgValue}) {
+            lbl.setFont(statsFont);
+            lbl.setForeground(statsFg);
+        }
+
+        JPanel statsBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        statsBar.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0,
+                UIManager.getColor("Separator.foreground")));
+        statsBar.add(historyStatsTotalTrades);
+        statsBar.add(historyStatsTotalCards);
+        statsBar.add(historyStatsTotalValue);
+        statsBar.add(historyStatsAvgValue);
+        tab.add(statsBar, BorderLayout.SOUTH);
+
         return tab;
     }
 
     private void refreshHistoryList() {
         allRecords = TradeHistoryService.loadAll(com.cardpricer.util.AppDataDirectory.tradesPath());
+        contentCache.clear(); // F11: invalidate content cache when records reload
         historyTableModel.setRowCount(0);
         applyHistoryFilter();
     }
 
     private void applyHistoryFilter() {
         String filter = historySearchField == null ? "" : historySearchField.getText().trim().toLowerCase();
+
+        // F12: Payment filter
+        String paymentFilter = (historyPaymentCombo == null)
+                ? "All" : (String) historyPaymentCombo.getSelectedItem();
+
         historyTableModel.setRowCount(0);
         int shown = 0;
         for (TradeRecord r : allRecords) {
-            if (!filter.isEmpty() && !r.customerName.toLowerCase().contains(filter)) continue;
+            // F12: Apply payment method filter first
+            if (!"All".equals(paymentFilter)
+                    && !r.paymentMethod.toLowerCase().contains(paymentFilter.toLowerCase())) {
+                continue;
+            }
+
+            // Text filter: check customer name, then date string, then full file content (F11)
+            if (!filter.isEmpty()) {
+                boolean nameMatch  = r.customerName.toLowerCase().contains(filter);
+                boolean dateMatch  = r.date.format(HISTORY_DATE_FMT).toLowerCase().contains(filter);
+                boolean bodyMatch  = !nameMatch && !dateMatch
+                        && getOrLoadContent(r.filename).toLowerCase().contains(filter);
+                if (!nameMatch && !dateMatch && !bodyMatch) continue;
+            }
+
             historyTableModel.addRow(new Object[]{
                     r.date.format(HISTORY_DATE_FMT),
                     r.customerName,
@@ -558,6 +621,48 @@ public class FileManagerPanel extends JPanel {
         if (historyStatusLabel != null) {
             historyStatusLabel.setText(shown + " record(s) found");
         }
+        updateHistoryStats(); // F13
+    }
+
+    /** F11: Returns cached file content, loading on first access. */
+    private String getOrLoadContent(String filename) {
+        return contentCache.computeIfAbsent(filename, path -> {
+            try {
+                return Files.readString(Path.of(path), StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                return "";
+            }
+        });
+    }
+
+    /** F13: Updates the stats bar with counts and values from the current filtered table. */
+    private void updateHistoryStats() {
+        if (historyStatsTotalTrades == null) return;
+        int tradeCount = historyTableModel.getRowCount();
+        int cardCount  = 0;
+        java.math.BigDecimal totalValue = java.math.BigDecimal.ZERO;
+
+        for (int i = 0; i < tradeCount; i++) {
+            Object cardsObj = historyTableModel.getValueAt(i, 4);
+            if (cardsObj instanceof Integer) {
+                cardCount += (Integer) cardsObj;
+            } else {
+                try { cardCount += Integer.parseInt(cardsObj.toString()); } catch (Exception ignored) {}
+            }
+            String valStr = historyTableModel.getValueAt(i, 3).toString()
+                    .replace("$", "").replace(",", "").trim();
+            try { totalValue = totalValue.add(new java.math.BigDecimal(valStr)); } catch (Exception ignored) {}
+        }
+
+        java.math.BigDecimal avgValue = tradeCount > 0
+                ? totalValue.divide(java.math.BigDecimal.valueOf(tradeCount), 2,
+                    java.math.RoundingMode.HALF_UP)
+                : java.math.BigDecimal.ZERO;
+
+        historyStatsTotalTrades.setText("Trades: " + tradeCount);
+        historyStatsTotalCards.setText("  Cards: " + cardCount);
+        historyStatsTotalValue.setText(String.format("  Total: $%.2f", totalValue));
+        historyStatsAvgValue.setText(String.format("  Avg: $%.2f", avgValue));
     }
 
     /** Returns the TradeRecord for the currently selected history row, or null. */
