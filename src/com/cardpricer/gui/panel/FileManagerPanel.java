@@ -1,5 +1,6 @@
 package com.cardpricer.gui.panel;
 
+import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.model.TradeRecord;
 import com.cardpricer.service.ReceiptPrintService;
 import com.cardpricer.service.TradeHistoryService;
@@ -28,6 +29,26 @@ import java.util.List;
  * History (trade receipts with preview and print/PDF support).
  */
 public class FileManagerPanel extends JPanel {
+
+    private static final String   HELP_TITLE = "File Manager — Help";
+    private static final String[] HELP_COLS  = {"Tab / Feature", "Description"};
+    private static final String[][] HELP_ROWS = {
+        {"--- Tabs", ""},
+        {"Local Files",     "Files saved by this app on this machine"},
+        {"Shared Files",    "Files in the shared network folder (set in Preferences)"},
+        {"History",         "Browse and preview past trade receipts"},
+        {"--- Local / Shared", ""},
+        {"Filter",          "Narrow the file list by category"},
+        {"Refresh",         "Reload the file list from disk"},
+        {"Open",            "Open the file with your default application"},
+        {"Copy to Local",   "Copy a shared file into local storage"},
+        {"Delete",          "Permanently remove the selected file"},
+        {"--- History", ""},
+        {"Search",          "Filter trade history by customer or date"},
+        {"Print",           "Send the selected trade receipt to a printer"},
+        {"Save PDF",        "Export the selected trade receipt as a PDF"},
+        {"Open in Explorer","Reveal the receipt file in Windows Explorer"},
+    };
 
     // Local files tab
     private JTable fileTable;
@@ -101,7 +122,20 @@ public class FileManagerPanel extends JPanel {
         titlePanel.add(Box.createVerticalStrut(4));
         titlePanel.add(subtitle);
 
-        panel.add(titlePanel, BorderLayout.NORTH);
+        JButton helpBtn = new JButton("?");
+        helpBtn.setFocusPainted(false);
+        helpBtn.setPreferredSize(new Dimension(34, 34));
+        helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
+        helpBtn.setToolTipText("Help");
+        helpBtn.addActionListener(e ->
+                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(this),
+                        HELP_TITLE, HELP_COLS, HELP_ROWS));
+
+        JPanel titleRow = new JPanel(new BorderLayout(10, 0));
+        titleRow.add(titlePanel, BorderLayout.CENTER);
+        titleRow.add(helpBtn,    BorderLayout.EAST);
+
+        panel.add(titleRow, BorderLayout.NORTH);
 
         // Filter section
         JPanel filterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));

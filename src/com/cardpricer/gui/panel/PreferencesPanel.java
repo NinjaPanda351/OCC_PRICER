@@ -1,5 +1,7 @@
 package com.cardpricer.gui.panel;
 
+import com.cardpricer.gui.ShortcutHelpDialog;
+import com.cardpricer.model.BountyCard;
 import com.cardpricer.model.BuyRateRule;
 import com.cardpricer.service.BuyRateService;
 import com.formdev.flatlaf.*;
@@ -11,6 +13,7 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,6 +27,29 @@ import java.util.prefs.Preferences;
  * Panel for application preferences and settings.
  */
 public class PreferencesPanel extends JPanel {
+
+    private static final String   HELP_TITLE = "Preferences — Help";
+    private static final String[] HELP_COLS  = {"Setting", "Description"};
+    private static final String[][] HELP_ROWS = {
+        {"--- Appearance", ""},
+        {"Theme",           "Select and apply a UI colour theme instantly"},
+        {"--- Network", ""},
+        {"Shared Folder",   "Path to a network folder shared across workstations"},
+        {"Browse",          "Pick the shared folder via a folder chooser"},
+        {"Test Connection", "Verify the folder exists and is writable"},
+        {"Save",            "Persist the shared folder path"},
+        {"--- Buy Rates — Rules", ""},
+        {"Min Price ($)",   "Cards above this value use this row's rates"},
+        {"Credit % / Check %", "Payout percentages for this price tier"},
+        {"$0.00 row",       "Catch-all rate — cannot be removed"},
+        {"Save Rules",      "Persist rule changes to disk"},
+        {"--- Buy Rates — Bounties", ""},
+        {"Add Bounty",      "Override buy rate for a specific card by name"},
+        {"Import CSV",      "Bulk-import bounties: CARD NAME,CREDIT%,CHECK%"},
+        {"Import and Add",  "Merge CSV rows — existing names overwritten"},
+        {"Import and Replace", "Clear all bounties first, then import"},
+        {"Save Bounties",   "Persist bounty changes to disk"},
+    };
 
     /**
      * Functional interface for a theme-application action that may throw a checked exception.
@@ -96,6 +122,9 @@ public class PreferencesPanel extends JPanel {
     private final BuyRateService buyRateService = new BuyRateService();
     private DefaultTableModel rulesTableModel;
     private JLabel buyRatesStatusLabel;
+    private DefaultTableModel bountyTableModel;
+    private JTable bountyTable;
+    private JLabel bountiesStatusLabel;
 
     /** Constructs the preferences panel and initialises the Appearance and Network tabs. */
     public PreferencesPanel() {
@@ -107,8 +136,8 @@ public class PreferencesPanel extends JPanel {
     }
 
     private JPanel createTopPanel() {
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        JPanel titlePanel = new JPanel();
+        titlePanel.setLayout(new BoxLayout(titlePanel, BoxLayout.Y_AXIS));
 
         JLabel title = new JLabel("Preferences");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 24f));
@@ -118,9 +147,22 @@ public class PreferencesPanel extends JPanel {
         subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
         subtitle.setForeground(UIManager.getColor("Label.disabledForeground"));
 
-        panel.add(title);
-        panel.add(Box.createVerticalStrut(4));
-        panel.add(subtitle);
+        titlePanel.add(title);
+        titlePanel.add(Box.createVerticalStrut(4));
+        titlePanel.add(subtitle);
+
+        JButton helpBtn = new JButton("?");
+        helpBtn.setFocusPainted(false);
+        helpBtn.setPreferredSize(new Dimension(34, 34));
+        helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
+        helpBtn.setToolTipText("Help");
+        helpBtn.addActionListener(e ->
+                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(this),
+                        HELP_TITLE, HELP_COLS, HELP_ROWS));
+
+        JPanel panel = new JPanel(new BorderLayout(10, 0));
+        panel.add(titlePanel, BorderLayout.CENTER);
+        panel.add(helpBtn,    BorderLayout.EAST);
 
         return panel;
     }
@@ -331,53 +373,91 @@ public class PreferencesPanel extends JPanel {
         rulesSection.setAlignmentX(Component.LEFT_ALIGNMENT);
         rulesSection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 300));
 
-        // --- Section 2: Bounty Cards (groundwork) ---
+        // --- Section 2: Bounty Cards ---
         JPanel bountySection = new JPanel(new BorderLayout(8, 8));
         bountySection.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createTitledBorder("Bounty Cards"),
                 new EmptyBorder(10, 10, 10, 10)
         ));
 
-        DefaultTableModel bountyModel = new DefaultTableModel(
-                new String[]{"Set", "Collector #", "Card Name", "Credit (%)", "Check (%)"}, 0) {
-            @Override public boolean isCellEditable(int r, int c) { return false; }
+        bountyTableModel = new DefaultTableModel(
+                new String[]{"Card Name", "Credit (%)", "Check (%)"}, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return true; }
         };
-        JTable bountyTable = new JTable(bountyModel);
+        bountyTable = new JTable(bountyTableModel);
         bountyTable.setRowHeight(24);
+        bountyTable.getTableHeader().setReorderingAllowed(false);
+
+        // '+' key duplicates the selected row
+        bountyTable.getInputMap(JComponent.WHEN_FOCUSED).put(
+                KeyStroke.getKeyStroke('+'), "duplicateRow");
+        bountyTable.getActionMap().put("duplicateRow", new AbstractAction() {
+            @Override public void actionPerformed(java.awt.event.ActionEvent e) {
+                int row = bountyTable.getSelectedRow();
+                if (row < 0) return;
+                // Stop any active cell editor first
+                if (bountyTable.isEditing()) bountyTable.getCellEditor().stopCellEditing();
+                String name   = (String) bountyTableModel.getValueAt(row, 0);
+                String credit = (String) bountyTableModel.getValueAt(row, 1);
+                String check  = (String) bountyTableModel.getValueAt(row, 2);
+                bountyTableModel.addRow(new String[]{name, credit, check});
+                int newRow = bountyTableModel.getRowCount() - 1;
+                bountyTable.setRowSelectionInterval(newRow, newRow);
+                bountyTable.scrollRectToVisible(bountyTable.getCellRect(newRow, 0, true));
+                bountiesStatusLabel.setText("Row duplicated — click Save Bounties to persist.");
+                bountiesStatusLabel.setForeground(UIManager.getColor("Label.foreground"));
+            }
+        });
         JScrollPane bountyScroll = new JScrollPane(bountyTable);
-        bountyScroll.setPreferredSize(new Dimension(500, 120));
+        bountyScroll.setPreferredSize(new Dimension(500, 140));
         bountySection.add(bountyScroll, BorderLayout.CENTER);
 
         JPanel bountyBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         JButton addBountyBtn    = new JButton("Add Bounty");
-        JButton removeBountyBtn = new JButton("Remove Bounty");
-        addBountyBtn.addActionListener(e ->
-                JOptionPane.showMessageDialog(this, "Bounty card editing coming soon!", "Coming Soon",
-                        JOptionPane.INFORMATION_MESSAGE));
-        removeBountyBtn.addActionListener(e ->
-                JOptionPane.showMessageDialog(this, "Bounty card editing coming soon!", "Coming Soon",
-                        JOptionPane.INFORMATION_MESSAGE));
+        JButton removeBountyBtn = new JButton("Remove Selected");
+        JButton importCsvBtn    = new JButton("Import CSV");
+        JButton saveBountiesBtn = new JButton("Save Bounties");
+
+        bountiesStatusLabel = new JLabel(" ");
+        bountiesStatusLabel.setFont(bountiesStatusLabel.getFont().deriveFont(Font.ITALIC, 11f));
+
+        addBountyBtn.addActionListener(e -> showAddBountyDialog());
+        removeBountyBtn.addActionListener(e -> {
+            int row = bountyTable.getSelectedRow();
+            if (row >= 0) {
+                bountyTableModel.removeRow(row);
+                bountiesStatusLabel.setText("Row removed — click Save Bounties to persist.");
+                bountiesStatusLabel.setForeground(UIManager.getColor("Label.foreground"));
+            }
+        });
+        importCsvBtn.addActionListener(e -> importBountyCsv());
+        saveBountiesBtn.addActionListener(e -> saveBounties());
+
         bountyBtns.add(addBountyBtn);
         bountyBtns.add(removeBountyBtn);
+        bountyBtns.add(importCsvBtn);
+        bountyBtns.add(saveBountiesBtn);
+        bountyBtns.add(bountiesStatusLabel);
         bountySection.add(bountyBtns, BorderLayout.SOUTH);
 
         JLabel bountyHelp = new JLabel(
-                "<html>Bounty cards override tier rules for specific printings.<br>"
-                + "Editing is coming in a future release.</html>");
+                "<html>Bounty cards override tier rules for <b>any printing</b> of the named card (case-insensitive).<br>"
+                + "CSV import format: <code>CARD NAME,CREDIT PERCENT,CHECK PERCENT</code></html>");
         bountyHelp.setFont(bountyHelp.getFont().deriveFont(Font.ITALIC, 11f));
         bountyHelp.setForeground(UIManager.getColor("Label.disabledForeground"));
         bountySection.add(bountyHelp, BorderLayout.NORTH);
 
         bountySection.setAlignmentX(Component.LEFT_ALIGNMENT);
-        bountySection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 260));
+        bountySection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 300));
 
         panel.add(rulesSection);
         panel.add(Box.createVerticalStrut(12));
         panel.add(bountySection);
         panel.add(Box.createVerticalGlue());
 
-        // Populate table from saved prefs
+        // Populate tables from saved prefs
         loadRulesIntoTable();
+        loadBountiesIntoTable();
 
         return panel;
     }
@@ -429,6 +509,178 @@ public class PreferencesPanel extends JPanel {
             JOptionPane.showMessageDialog(this, ex.getMessage(),
                     "Validation Error", JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    /** Populates the bounty table from the current BuyRateService state. */
+    private void loadBountiesIntoTable() {
+        if (bountyTableModel == null) return;
+        bountyTableModel.setRowCount(0);
+        for (BountyCard b : buyRateService.getBounties()) {
+            String creditStr = b.creditRate.multiply(new BigDecimal("100"))
+                                    .stripTrailingZeros().toPlainString();
+            String checkStr  = b.checkRate.multiply(new BigDecimal("100"))
+                                    .stripTrailingZeros().toPlainString();
+            bountyTableModel.addRow(new String[]{b.cardName, creditStr, checkStr});
+        }
+    }
+
+    /** Opens a dialog to add a single bounty card entry. */
+    private void showAddBountyDialog() {
+        JTextField nameField   = new JTextField(20);
+        JTextField creditField = new JTextField("60", 6);
+        JTextField checkField  = new JTextField("40", 6);
+
+        JPanel dialogPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets  = new Insets(4, 4, 4, 4);
+        gbc.anchor  = GridBagConstraints.WEST;
+        gbc.fill    = GridBagConstraints.HORIZONTAL;
+
+        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0;
+        dialogPanel.add(new JLabel("Card Name:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        dialogPanel.add(nameField, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 0;
+        dialogPanel.add(new JLabel("Credit %:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        dialogPanel.add(creditField, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 2; gbc.weightx = 0;
+        dialogPanel.add(new JLabel("Check %:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        dialogPanel.add(checkField, gbc);
+
+        int result = JOptionPane.showConfirmDialog(this, dialogPanel,
+                "Add Bounty Card", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (result != JOptionPane.OK_OPTION) return;
+
+        String name = nameField.getText().trim();
+        if (name.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Card name cannot be empty.",
+                    "Invalid Input", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        try {
+            new BigDecimal(creditField.getText().trim());
+            new BigDecimal(checkField.getText().trim());
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this, "Credit and Check must be valid numbers.",
+                    "Invalid Input", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        bountyTableModel.addRow(new String[]{name, creditField.getText().trim(), checkField.getText().trim()});
+        int newRow = bountyTableModel.getRowCount() - 1;
+        bountyTable.setRowSelectionInterval(newRow, newRow);
+        bountyTable.scrollRectToVisible(bountyTable.getCellRect(newRow, 0, true));
+        bountiesStatusLabel.setText("Row added — click Save Bounties to persist.");
+        bountiesStatusLabel.setForeground(UIManager.getColor("Label.foreground"));
+    }
+
+    /** Opens a CSV file chooser, parses the file, then merges or replaces the bounty table. */
+    private void importBountyCsv() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Import Bounty CSV");
+        chooser.setFileFilter(new FileNameExtensionFilter("CSV / Text files (*.csv, *.txt)", "csv", "txt"));
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
+
+        File file = chooser.getSelectedFile();
+        List<BountyCard> parsed;
+        try {
+            parsed = buyRateService.parseBountyCsv(file);
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this,
+                    "Failed to parse CSV:\n" + ex.getMessage(),
+                    "Import Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        if (parsed.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No valid bounty rows found in the file.",
+                    "Import", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        // Ask user: Add (merge) or Replace
+        String[] options = {"Import and Add", "Import and Replace", "Cancel"};
+        int choice = JOptionPane.showOptionDialog(this,
+                "Found " + parsed.size() + " bounty row(s) in the file.\n"
+                + "How should they be imported?",
+                "Import Mode",
+                JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE,
+                null, options, options[0]);
+
+        if (choice == 2 || choice == JOptionPane.CLOSED_OPTION) return;
+
+        if (choice == 1) {
+            // Import and Replace — clear table first
+            bountyTableModel.setRowCount(0);
+        }
+
+        // Merge: build a name→row map of existing entries so incoming overwrites duplicates
+        if (choice == 0) {
+            // Build index of existing rows by name (upper-cased)
+            java.util.Map<String, Integer> existingIndex = new java.util.HashMap<>();
+            for (int r = 0; r < bountyTableModel.getRowCount(); r++) {
+                String existing = ((String) bountyTableModel.getValueAt(r, 0)).toUpperCase();
+                existingIndex.put(existing, r);
+            }
+            for (BountyCard b : parsed) {
+                String creditStr = b.creditRate.multiply(new BigDecimal("100"))
+                                        .stripTrailingZeros().toPlainString();
+                String checkStr  = b.checkRate.multiply(new BigDecimal("100"))
+                                        .stripTrailingZeros().toPlainString();
+                Integer existRow = existingIndex.get(b.cardName.toUpperCase());
+                if (existRow != null) {
+                    bountyTableModel.setValueAt(b.cardName, existRow, 0);
+                    bountyTableModel.setValueAt(creditStr,  existRow, 1);
+                    bountyTableModel.setValueAt(checkStr,   existRow, 2);
+                } else {
+                    bountyTableModel.addRow(new String[]{b.cardName, creditStr, checkStr});
+                }
+            }
+        } else {
+            // Replace — table already cleared, just add all
+            for (BountyCard b : parsed) {
+                String creditStr = b.creditRate.multiply(new BigDecimal("100"))
+                                        .stripTrailingZeros().toPlainString();
+                String checkStr  = b.checkRate.multiply(new BigDecimal("100"))
+                                        .stripTrailingZeros().toPlainString();
+                bountyTableModel.addRow(new String[]{b.cardName, creditStr, checkStr});
+            }
+        }
+
+        bountiesStatusLabel.setText("Imported " + parsed.size() + " row(s) — click Save Bounties to persist.");
+        bountiesStatusLabel.setForeground(UIManager.getColor("Label.foreground"));
+    }
+
+    /** Reads the bounty table rows and persists them via BuyRateService. */
+    private void saveBounties() {
+        List<BountyCard> newBounties = new ArrayList<>();
+        for (int i = 0; i < bountyTableModel.getRowCount(); i++) {
+            try {
+                String name      = ((String) bountyTableModel.getValueAt(i, 0)).trim();
+                BigDecimal credit = new BigDecimal(((String) bountyTableModel.getValueAt(i, 1)).trim())
+                                        .divide(new BigDecimal("100"));
+                BigDecimal check  = new BigDecimal(((String) bountyTableModel.getValueAt(i, 2)).trim())
+                                        .divide(new BigDecimal("100"));
+                if (name.isEmpty()) {
+                    JOptionPane.showMessageDialog(this,
+                            "Row " + (i + 1) + ": card name is empty.",
+                            "Invalid Input", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                newBounties.add(new BountyCard(name, credit, check));
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(this,
+                        "Row " + (i + 1) + " contains invalid numbers. Please correct and try again.",
+                        "Invalid Input", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        }
+        buyRateService.saveBounties(newBounties);
+        bountiesStatusLabel.setText("Saved!");
+        bountiesStatusLabel.setForeground(new Color(0, 150, 0));
     }
 
     private JPanel createThemeSection() {

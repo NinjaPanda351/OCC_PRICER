@@ -1,6 +1,7 @@
 package com.cardpricer.gui.panel;
 
 import com.cardpricer.exception.ScryfallApiException;
+import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.model.Card;
 import com.cardpricer.model.CardEntry;
 import com.cardpricer.service.CsvExportService;
@@ -24,6 +25,16 @@ import java.util.List;
  * whether it is safe to unload this panel when the user navigates away.
  */
 public class InventoryPanel extends JPanel implements ManagedPanel {
+
+    private static final String   HELP_TITLE = "Inventory Update — Help";
+    private static final String[] HELP_COLS  = {"Feature", "Description"};
+    private static final String[][] HELP_ROWS = {
+        {"Select Set",       "Choose an MTG set from the dropdown"},
+        {"Load Set Cards",   "Download all cards in the selected set"},
+        {"Qty column",       "Click a cell to type the card quantity"},
+        {"Export",           "Save the current quantities as a CSV file"},
+        {"Clear Quantities", "Reset all quantities back to zero"},
+    };
 
     private final ScryfallApiService apiService;
     private static final String DATA_DIRECTORY = com.cardpricer.util.AppDataDirectory.inventoryPath();
@@ -74,7 +85,20 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
         titlePanel.add(Box.createVerticalStrut(4));
         titlePanel.add(subtitle);
 
-        panel.add(titlePanel, BorderLayout.NORTH);
+        JButton helpBtn = new JButton("?");
+        helpBtn.setFocusPainted(false);
+        helpBtn.setPreferredSize(new Dimension(34, 34));
+        helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
+        helpBtn.setToolTipText("Help");
+        helpBtn.addActionListener(e ->
+                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(this),
+                        HELP_TITLE, HELP_COLS, HELP_ROWS));
+
+        JPanel titleRow = new JPanel(new BorderLayout(10, 0));
+        titleRow.add(titlePanel, BorderLayout.CENTER);
+        titleRow.add(helpBtn,    BorderLayout.EAST);
+
+        panel.add(titleRow, BorderLayout.NORTH);
 
         // Set selection section
         JPanel selectionPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));

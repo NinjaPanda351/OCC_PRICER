@@ -1,5 +1,6 @@
 package com.cardpricer.gui.panel;
 
+import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.model.Card;
 import com.cardpricer.service.CsvExportService;
 import com.cardpricer.service.ScryfallApiService;
@@ -21,6 +22,20 @@ import java.util.Map;
  * whether it is safe to unload this panel while a fetch is in progress.
  */
 public class BulkPricerPanel extends JPanel implements ManagedPanel {
+
+    private static final String   HELP_TITLE = "Set Pricer — Help";
+    private static final String[] HELP_COLS  = {"Feature", "Description"};
+    private static final String[][] HELP_ROWS = {
+        {"Search box",      "Filter the set list by name"},
+        {"Check / uncheck", "Select which sets to fetch prices for"},
+        {"Select All",      "Check all currently visible sets"},
+        {"Deselect All",    "Uncheck all currently visible sets"},
+        {"Export Format",   "Choose the output CSV format and structure"},
+        {"Combined File",   "Merge all selected sets into one output file"},
+        {"Fetch Prices",    "Start downloading prices from Scryfall"},
+        {"Cancel",          "Stop the fetch currently in progress"},
+        {"Log area",        "Shows live progress, errors, and results"},
+    };
 
     private final ScryfallApiService apiService;
     private final CsvExportService csvService;
@@ -61,8 +76,8 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
     }
 
     private JPanel createHeaderPanel() {
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        JPanel titlePanel = new JPanel();
+        titlePanel.setLayout(new BoxLayout(titlePanel, BoxLayout.Y_AXIS));
 
         JLabel title = new JLabel("Set Pricer");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 24f));
@@ -71,10 +86,23 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
         JLabel subtitle = new JLabel("Select sets to fetch prices from Scryfall/TCGPlayer");
         subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        panel.add(title);
-        panel.add(Box.createVerticalStrut(4));
-        panel.add(subtitle);
-        panel.add(Box.createVerticalStrut(16));
+        titlePanel.add(title);
+        titlePanel.add(Box.createVerticalStrut(4));
+        titlePanel.add(subtitle);
+
+        JButton helpBtn = new JButton("?");
+        helpBtn.setFocusPainted(false);
+        helpBtn.setPreferredSize(new Dimension(34, 34));
+        helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
+        helpBtn.setToolTipText("Help");
+        helpBtn.addActionListener(e ->
+                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(this),
+                        HELP_TITLE, HELP_COLS, HELP_ROWS));
+
+        JPanel panel = new JPanel(new BorderLayout(10, 0));
+        panel.add(titlePanel, BorderLayout.CENTER);
+        panel.add(helpBtn,    BorderLayout.EAST);
+        panel.setBorder(new EmptyBorder(0, 0, 16, 0));
 
         return panel;
     }

@@ -56,6 +56,25 @@ import java.util.List;
  */
 public class TradePanel extends JPanel {
 
+    // Help dialog content
+    private static final String   HELP_TITLE = "Trade Panel — Help";
+    private static final String[] HELP_COLS  = {"Shortcut / Code", "Description"};
+    private static final String[][] HELP_ROWS = {
+        {"--- Keyboard Shortcuts", ""},
+        {"Enter",          "Add card from the code field"},
+        {"+ / Numpad +",   "Duplicate the selected row"},
+        {"Ctrl+Z",         "Undo the last added card"},
+        {"Ctrl+F / F2",    "Search for a card by name"},
+        {"F1 / [?]",       "Show this help dialog"},
+        {"--- Code Formats", ""},
+        {"TDM 3",          "Normal finish (set code + number)"},
+        {"TDM 3f",         "Foil finish"},
+        {"TDM 3e",         "Etched finish"},
+        {"TDM 3s",         "Surge foil"},
+        {"PLST ARB 1",     "The List card (PLST + original set + number)"},
+        {"misc",           "Manual entry — prompts for name & price"},
+    };
+
     private final ScryfallApiService apiService;
     private final TradeReceivingExportService exportService;
     private final PricingService pricingService = new PricingService();
@@ -152,7 +171,10 @@ public class TradePanel extends JPanel {
         panelAM.put("globalDuplicate", new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                duplicateSelectedCard();
+                // keyTyped handles '+' when the code field has focus; skip here to avoid double-fire
+                if (!cardCodeField.isFocusOwner()) {
+                    duplicateSelectedCard();
+                }
             }
         });
 
@@ -170,7 +192,8 @@ public class TradePanel extends JPanel {
         panelAM.put("showHelp", new AbstractAction() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(TradePanel.this));
+                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(TradePanel.this),
+                        HELP_TITLE, HELP_COLS, HELP_ROWS);
             }
         });
 
@@ -275,6 +298,14 @@ public class TradePanel extends JPanel {
         cardCodeField.setToolTipText("Type set code + number, press Enter to add");
 
         cardCodeField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyTyped(KeyEvent e) {
+                if (e.getKeyChar() == '+') {
+                    e.consume(); // prevent '+' from being inserted into the field
+                    duplicateSelectedCard();
+                }
+            }
+
             @Override
             public void keyReleased(KeyEvent e) {
                 if (e.getKeyCode() == KeyEvent.VK_ENTER) {
@@ -792,9 +823,10 @@ public class TradePanel extends JPanel {
         helpBtn.setFocusPainted(false);
         helpBtn.setPreferredSize(new Dimension(34, 34));
         helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
-        helpBtn.setToolTipText("Keyboard Shortcuts (F1)");
+        helpBtn.setToolTipText("Help (F1)");
         helpBtn.addActionListener(e ->
-                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(this)));
+                ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(this),
+                        HELP_TITLE, HELP_COLS, HELP_ROWS));
 
         JPanel helpRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         helpRow.add(helpBtn);
@@ -1002,9 +1034,9 @@ public class TradePanel extends JPanel {
             refreshSummary();
 
             // Auto-highlight and scroll to the newly added row
-            int lastRow = cardTable.getRowCount() - 1;
-            cardTable.setRowSelectionInterval(lastRow, lastRow);
-            cardTable.scrollRectToVisible(cardTable.getCellRect(lastRow, 0, true));
+            int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
+            cardTable.setRowSelectionInterval(viewRow, viewRow);
+            cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
 
             cardCodeField.setText("");
             clearPreview();
@@ -1195,9 +1227,9 @@ public class TradePanel extends JPanel {
             refreshSummary();
 
             // Auto-highlight and scroll to the newly added row
-            int lastRow = cardTable.getRowCount() - 1;
-            cardTable.setRowSelectionInterval(lastRow, lastRow);
-            cardTable.scrollRectToVisible(cardTable.getCellRect(lastRow, 0, true));
+            int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
+            cardTable.setRowSelectionInterval(viewRow, viewRow);
+            cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
 
             cardCodeField.setText("");
             clearPreview();
@@ -1432,9 +1464,9 @@ public class TradePanel extends JPanel {
         if (undoBtn != null) undoBtn.setEnabled(true);
 
         // Auto-highlight and scroll to the newly added row
-        int lastRow = cardTable.getRowCount() - 1;
-        cardTable.setRowSelectionInterval(lastRow, lastRow);
-        cardTable.scrollRectToVisible(cardTable.getCellRect(lastRow, 0, true));
+        int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
+        cardTable.setRowSelectionInterval(viewRow, viewRow);
+        cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
 
         cardCodeField.setText("");
         clearPreview();
@@ -1525,9 +1557,9 @@ public class TradePanel extends JPanel {
         refreshSummary();
 
         // Select the newly added duplicate
-        int lastRow = cardTable.getRowCount() - 1;
-        cardTable.setRowSelectionInterval(lastRow, lastRow);
-        cardTable.scrollRectToVisible(cardTable.getCellRect(lastRow, 0, true));
+        int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
+        cardTable.setRowSelectionInterval(viewRow, viewRow);
+        cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
     }
 
     /**
@@ -1646,14 +1678,16 @@ public class TradePanel extends JPanel {
             // Look up tiered payout for this card
             String setCode   = null;
             String collNum   = null;
+            String cardName  = null;
             if (i < receivedCards.size()) {
                 com.cardpricer.model.Card card = receivedCards.get(i).getCard();
-                setCode = card.getSetCode();
-                collNum = card.getCollectorNumber();
+                setCode  = card.getSetCode();
+                collNum  = card.getCollectorNumber();
+                cardName = card.getName();
             }
 
             BuyRateService.PayoutResult result =
-                    buyRateService.computePayout(setCode, collNum, unitPrice);
+                    buyRateService.computePayout(setCode, collNum, cardName, unitPrice);
             totalCredit = totalCredit.add(result.creditPayout().multiply(BigDecimal.valueOf(qty)));
             totalCheck  = totalCheck.add(result.checkPayout().multiply(BigDecimal.valueOf(qty)));
         }

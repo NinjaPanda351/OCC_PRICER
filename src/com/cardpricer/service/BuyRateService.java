@@ -6,6 +6,10 @@ import com.cardpricer.model.BuyRateRule;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -24,7 +28,7 @@ import java.util.prefs.Preferences;
  *
  * <h3>Lookup algorithm ({@link #computePayout})</h3>
  * <ol>
- *   <li>Check the bounty map — bounty always wins if found.</li>
+ *   <li>Check the bounty map by card name — bounty always wins if found.</li>
  *   <li>Walk rules sorted descending by threshold; first match wins.</li>
  *   <li>If no rules loaded (corruption guard), use hardcoded defaults (50% / 33%).</li>
  * </ol>
@@ -38,8 +42,8 @@ public class BuyRateService {
     private static final String RULES_KEY    = "buy.rate.rules";
     private static final String BOUNTIES_KEY = "buy.rate.bounties";
 
-    private static final BigDecimal DEFAULT_CREDIT = new BigDecimal("0.50");
-    private static final BigDecimal DEFAULT_CHECK  = new BigDecimal("0.33");
+    private static final BigDecimal DEFAULT_CREDIT    = new BigDecimal("0.50");
+    private static final BigDecimal DEFAULT_CHECK     = new BigDecimal("0.33");
     private static final BigDecimal DEFAULT_THRESHOLD = BigDecimal.ZERO;
 
     private static final Preferences PREFS =
@@ -51,7 +55,7 @@ public class BuyRateService {
     /** Rules sorted descending by thresholdMin (highest threshold first). */
     private List<BuyRateRule> rules = new ArrayList<>();
 
-    /** Bounty map keyed by {@code BountyCard.key()}. */
+    /** Bounty map keyed by card name upper-cased. */
     private Map<String, BountyCard> bounties = new HashMap<>();
 
     /**
@@ -85,19 +89,22 @@ public class BuyRateService {
      * Computes the credit and check payout amounts for a single card unit.
      * Multiply by quantity in the caller.
      *
-     * @param setCode         card set code (may be "MISC")
-     * @param collectorNumber collector number
+     * @param setCode         card set code (may be "MISC"; kept for future printing-specific use)
+     * @param collectorNumber collector number (kept for future printing-specific use)
+     * @param cardName        card name for bounty lookup (case-insensitive); may be null
      * @param marketValue     unit market price
      * @return payout result with amounts and rates applied
      */
-    public PayoutResult computePayout(String setCode, String collectorNumber, BigDecimal marketValue) {
-        // 1. Bounty lookup
-        String key = (setCode == null ? "" : setCode.toUpperCase()) + "/" + (collectorNumber == null ? "" : collectorNumber);
-        BountyCard bounty = bounties.get(key);
-        if (bounty != null) {
-            BigDecimal credit = marketValue.multiply(bounty.creditRate).setScale(2, RoundingMode.HALF_UP);
-            BigDecimal check  = marketValue.multiply(bounty.checkRate).setScale(2, RoundingMode.HALF_UP);
-            return new PayoutResult(credit, check, bounty.creditRate, bounty.checkRate, true);
+    public PayoutResult computePayout(String setCode, String collectorNumber,
+                                      String cardName, BigDecimal marketValue) {
+        // 1. Bounty lookup by card name
+        if (cardName != null && !cardName.isEmpty()) {
+            BountyCard bounty = bounties.get(cardName.toUpperCase());
+            if (bounty != null) {
+                BigDecimal credit = marketValue.multiply(bounty.creditRate).setScale(2, RoundingMode.HALF_UP);
+                BigDecimal check  = marketValue.multiply(bounty.checkRate).setScale(2, RoundingMode.HALF_UP);
+                return new PayoutResult(credit, check, bounty.creditRate, bounty.checkRate, true);
+            }
         }
 
         // 2. Tiered rules (sorted descending by threshold, so highest wins first)
@@ -127,7 +134,7 @@ public class BuyRateService {
     /**
      * Returns the current rules list in ascending threshold order (suitable for table display).
      *
-     * @return unmodifiable view of rules ascending by threshold
+     * @return list of rules ascending by threshold
      */
     public List<BuyRateRule> getRules() {
         List<BuyRateRule> ascending = new ArrayList<>(rules);
@@ -136,12 +143,14 @@ public class BuyRateService {
     }
 
     /**
-     * Returns the current bounties list.
+     * Returns the current bounties list sorted by card name.
      *
-     * @return list of all bounty cards
+     * @return list of all bounty cards sorted alphabetically by name
      */
     public List<BountyCard> getBounties() {
-        return new ArrayList<>(bounties.values());
+        List<BountyCard> list = new ArrayList<>(bounties.values());
+        list.sort(Comparator.comparing(b -> b.cardName.toUpperCase()));
+        return list;
     }
 
     /**
@@ -185,17 +194,63 @@ public class BuyRateService {
         JSONArray arr = new JSONArray();
         for (BountyCard b : newBounties) {
             JSONObject obj = new JSONObject();
-            obj.put("setCode",         b.setCode);
-            obj.put("collectorNumber", b.collectorNumber);
-            obj.put("cardName",        b.cardName);
-            obj.put("creditRate",      b.creditRate.toPlainString());
-            obj.put("checkRate",       b.checkRate.toPlainString());
+            obj.put("cardName",   b.cardName);
+            obj.put("creditRate", b.creditRate.toPlainString());
+            obj.put("checkRate",  b.checkRate.toPlainString());
             arr.put(obj);
         }
         PREFS.put(BOUNTIES_KEY, arr.toString());
 
         bounties = buildBountyMap(newBounties);
         saveGeneration++;
+    }
+
+    /**
+     * Parses a CSV file into a list of {@link BountyCard} objects.
+     *
+     * <p>Expected format:
+     * <pre>
+     * CARD NAME,CREDIT PERCENT,CHECK PERCENT
+     * Black Lotus,80,60
+     * Ancestral Recall,75,55
+     * </pre>
+     * Lines starting with {@code #} and blank lines are skipped. The first
+     * header line (containing "CARD NAME") is also skipped.
+     *
+     * @param file CSV file to parse
+     * @return list of parsed bounty cards
+     * @throws IOException if the file cannot be read or a data line is malformed
+     */
+    public List<BountyCard> parseBountyCsv(File file) throws IOException {
+        List<BountyCard> result = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            String line;
+            int lineNum = 0;
+            while ((line = reader.readLine()) != null) {
+                lineNum++;
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) continue;
+                // Skip header row
+                if (trimmed.toUpperCase().startsWith("CARD NAME")) continue;
+
+                String[] parts = trimmed.split(",", 3);
+                if (parts.length < 3) {
+                    throw new IOException("Line " + lineNum + ": expected 3 columns, got " + parts.length);
+                }
+                try {
+                    String name       = parts[0].trim();
+                    BigDecimal credit = new BigDecimal(parts[1].trim()).divide(new BigDecimal("100"));
+                    BigDecimal check  = new BigDecimal(parts[2].trim()).divide(new BigDecimal("100"));
+                    if (name.isEmpty()) {
+                        throw new IOException("Line " + lineNum + ": card name is empty");
+                    }
+                    result.add(new BountyCard(name, credit, check));
+                } catch (NumberFormatException e) {
+                    throw new IOException("Line " + lineNum + ": " + e.getMessage());
+                }
+            }
+        }
+        return result;
     }
 
     /**
@@ -251,12 +306,10 @@ public class BuyRateService {
                 JSONArray arr = new JSONArray(json);
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject obj = arr.getJSONObject(i);
-                    String setCode         = obj.getString("setCode");
-                    String collectorNumber = obj.getString("collectorNumber");
-                    String cardName        = obj.getString("cardName");
-                    BigDecimal credit      = new BigDecimal(obj.getString("creditRate"));
-                    BigDecimal check       = new BigDecimal(obj.getString("checkRate"));
-                    list.add(new BountyCard(setCode, collectorNumber, cardName, credit, check));
+                    String cardName    = obj.getString("cardName");
+                    BigDecimal credit  = new BigDecimal(obj.getString("creditRate"));
+                    BigDecimal check   = new BigDecimal(obj.getString("checkRate"));
+                    list.add(new BountyCard(cardName, credit, check));
                 }
             } catch (Exception e) {
                 System.err.println("[BuyRateService] Failed to parse bounties: " + e.getMessage());

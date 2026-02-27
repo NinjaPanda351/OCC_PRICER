@@ -5,22 +5,13 @@ import java.math.BigDecimal;
 /**
  * Immutable value class representing a Bounty Board entry.
  *
- * <p>A bounty card overrides the standard tiered buy rates for a specific
- * card printing identified by set code + collector number. Bounties always
- * take priority over tiered rules.
- *
- * <p>UI editing is deferred to a future release; persistence and lookup
- * are fully operational now.
+ * <p>A bounty card overrides the standard tiered buy rates for any card
+ * matching by name (case-insensitive, regardless of printing or finish).
+ * Bounties always take priority over tiered rules.
  */
 public final class BountyCard {
 
-    /** Set code for the targeted printing (e.g. {@code "TDM"}). */
-    public final String setCode;
-
-    /** Collector number for the targeted printing (e.g. {@code "3"}). */
-    public final String collectorNumber;
-
-    /** Human-readable card name for display purposes. */
+    /** Card name for matching (case-insensitive). */
     public final String cardName;
 
     /** Credit payout rate override, e.g. {@code 0.70} for 70%. */
@@ -32,48 +23,41 @@ public final class BountyCard {
     /**
      * Creates a new bounty card entry.
      *
-     * @param setCode         set code (case-insensitive during lookup)
-     * @param collectorNumber collector number
-     * @param cardName        display name
-     * @param creditRate      credit payout rate
-     * @param checkRate       check payout rate
+     * @param cardName   display name (used for case-insensitive matching)
+     * @param creditRate credit payout rate
+     * @param checkRate  check payout rate
      */
-    public BountyCard(String setCode, String collectorNumber, String cardName,
-                      BigDecimal creditRate, BigDecimal checkRate) {
-        this.setCode         = setCode;
-        this.collectorNumber = collectorNumber;
-        this.cardName        = cardName;
-        this.creditRate      = creditRate;
-        this.checkRate       = checkRate;
+    public BountyCard(String cardName, BigDecimal creditRate, BigDecimal checkRate) {
+        this.cardName   = cardName;
+        this.creditRate = creditRate;
+        this.checkRate  = checkRate;
     }
 
     /**
-     * Returns {@code true} when this bounty matches the given set code and
-     * collector number (case-insensitive comparison).
+     * Returns {@code true} when this bounty matches the given card name
+     * (case-insensitive comparison).
      *
-     * @param setCode         set code to test
-     * @param collectorNumber collector number to test
+     * @param name card name to test
      * @return whether this bounty applies
      */
-    public boolean matches(String setCode, String collectorNumber) {
-        return this.setCode.equalsIgnoreCase(setCode)
-            && this.collectorNumber.equalsIgnoreCase(collectorNumber);
+    public boolean matches(String name) {
+        return this.cardName.equalsIgnoreCase(name);
     }
 
     /**
      * Returns the lookup key used in the bounty {@code HashMap}.
-     * Format: {@code "SETCODE/collectorNumber"} (set code upper-cased).
+     * The key is the card name upper-cased for case-insensitive lookup.
      *
      * @return the HashMap key for this bounty
      */
     public String key() {
-        return setCode.toUpperCase() + "/" + collectorNumber;
+        return cardName.toUpperCase();
     }
 
     @Override
     public String toString() {
-        return String.format("BountyCard{%s/%s \"%s\" credit=%.0f%% check=%.0f%%}",
-                setCode, collectorNumber, cardName,
+        return String.format("BountyCard{\"%s\" credit=%.0f%% check=%.0f%%}",
+                cardName,
                 creditRate.multiply(new BigDecimal("100")),
                 checkRate.multiply(new BigDecimal("100")));
     }
