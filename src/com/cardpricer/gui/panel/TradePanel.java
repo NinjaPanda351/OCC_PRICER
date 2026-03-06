@@ -16,6 +16,7 @@ import com.cardpricer.service.TradeReceivingExportService;
 import com.cardpricer.service.TradeSessionService;
 import com.cardpricer.util.CardCodeParser;
 import com.cardpricer.util.CardConstants;
+import com.cardpricer.util.VintageUtil;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -36,6 +37,8 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import javax.imageio.ImageIO;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -72,6 +75,7 @@ public class TradePanel extends JPanel {
         {"Ctrl+Z",         "Undo the last added card"},
         {"Ctrl+F / F2",    "Search for a card by name"},
         {"/",              "Jump to card code field"},
+        {"F4 / [Vintage]", "Show vintage set code reference"},
         {"F1 / [?]",       "Show this help dialog"},
         {"--- Code Formats", ""},
         {"TDM 3",          "Normal finish (set code + number)"},
@@ -206,6 +210,15 @@ public class TradePanel extends JPanel {
             public void actionPerformed(ActionEvent e) {
                 ShortcutHelpDialog.show(SwingUtilities.getWindowAncestor(TradePanel.this),
                         HELP_TITLE, HELP_COLS, HELP_ROWS);
+            }
+        });
+
+        // F4 → vintage set reference dialog
+        panelIM.put(KeyStroke.getKeyStroke(KeyEvent.VK_F4, 0), "showVintage");
+        panelAM.put("showVintage", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                showVintageReference();
             }
         });
 
@@ -823,11 +836,12 @@ public class TradePanel extends JPanel {
     private JPanel createBottomPanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
-        // ── Row 1: Search | Clear | Undo ──────────────────────────────────────
-        JButton searchBtn = new JButton("Search by Name (Ctrl+F)");
-        JButton clearBtn  = new JButton("Clear All");
+        // ── Row 1: Search | Clear | Undo | Vintage Sets ───────────────────────
+        JButton searchBtn  = new JButton("Search by Name (Ctrl+F)");
+        JButton clearBtn   = new JButton("Clear All");
         undoBtn = new JButton("Undo (Ctrl+Z)");
         undoBtn.setEnabled(false);
+        JButton vintageBtn = new JButton("Vintage Sets (F4)");
 
         // ── Row 2: Export POS | Save List | Print Receipt | Save as PDF ───────
         JButton exportInventoryBtn = new JButton("Export to POS (CSV)");
@@ -839,7 +853,7 @@ public class TradePanel extends JPanel {
 
         // Apply consistent sizing
         for (JButton btn : new JButton[]{
-                searchBtn, clearBtn, undoBtn,
+                searchBtn, clearBtn, undoBtn, vintageBtn,
                 exportInventoryBtn, saveListBtn, printReceiptBtn, savePdfBtn}) {
             btn.setFocusPainted(false);
             btn.setPreferredSize(new Dimension(165, 36));
@@ -847,6 +861,7 @@ public class TradePanel extends JPanel {
 
         searchBtn.addActionListener(e -> openSearchDialog());
         clearBtn.addActionListener(e -> clearAll());
+        vintageBtn.addActionListener(e -> showVintageReference());
         undoBtn.addActionListener(e -> undoLastCard());
         exportInventoryBtn.addActionListener(e -> exportToPOS());
         saveListBtn.addActionListener(e -> saveList());
@@ -857,6 +872,7 @@ public class TradePanel extends JPanel {
         row1.add(searchBtn);
         row1.add(clearBtn);
         row1.add(undoBtn);
+        row1.add(vintageBtn);
 
         JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         row2.add(exportInventoryBtn);
@@ -1010,6 +1026,18 @@ public class TradePanel extends JPanel {
                     }
 
                     displayPreview(card, parsed.finish);
+
+                    // Feature 8: auto-show card image for vintage sets so the
+                    // trader can visually verify the card before committing.
+                    if (VintageUtil.isVintageSet(card.getSetCode()) && card.getImageUrl() != null) {
+                        try {
+                            Point labelLoc = cardPreviewLabel.getLocationOnScreen();
+                            getImagePopup().show(card.getImageUrl(),
+                                    new Point(labelLoc.x + cardPreviewLabel.getWidth() + 12,
+                                              labelLoc.y));
+                        } catch (java.awt.IllegalComponentStateException ignored) {}
+                    }
+
                     addCard();
                 } catch (Exception e) {
                     // Check if it's a card not found error
@@ -1504,6 +1532,17 @@ public class TradePanel extends JPanel {
         }
 
         BigDecimal roundedPrice = pricingService.applyPricingRules(item.getUnitPrice(), card.getRarity());
+
+        // Feature 7: high-value confirmation — pause and verify before adding
+        if (roundedPrice.compareTo(VintageUtil.HIGH_VALUE_THRESHOLD) >= 0) {
+            if (!confirmHighValueAdd(card, roundedPrice)) {
+                // User cancelled — roll back the optimistic list additions
+                receivedCards.remove(receivedCards.size() - 1);
+                cardConditions.remove(cardConditions.size() - 1);
+                rowPayouts.remove(rowPayouts.size() - 1);
+                return;
+            }
+        }
 
         tableModel.addRow(new Object[]{
                 false,  // Checkbox unchecked by default
@@ -2216,6 +2255,125 @@ public class TradePanel extends JPanel {
         return SwingUtilities.getWindowAncestor(this);
     }
 
+    /** Opens the vintage set reference dialog via the shared ShortcutHelpDialog infrastructure. */
+    private void showVintageReference() {
+        ShortcutHelpDialog.show(getParentWindow(),
+                "Vintage Set Reference  —  Codes & Name Shortcuts",
+                VintageUtil.REF_COLUMNS, VintageUtil.REF_ROWS);
+    }
+
+    /**
+     * Shows a modal confirmation dialog for high-value cards.
+     * Loads the card image asynchronously inside the dialog while the user reviews.
+     *
+     * @param card  the card about to be added
+     * @param price the computed rounded price
+     * @return {@code true} if the user confirmed; {@code false} to cancel
+     */
+    private boolean confirmHighValueAdd(Card card, BigDecimal price) {
+        JDialog dialog = new JDialog(getParentWindow(),
+                "Verify High-Value Card", java.awt.Dialog.ModalityType.APPLICATION_MODAL);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+
+        JPanel main = new JPanel(new BorderLayout(14, 10));
+        main.setBorder(new EmptyBorder(16, 16, 12, 16));
+
+        // ── Left: card image ──────────────────────────────────────────────────
+        int imgW = 200;
+        int imgH = (int) (imgW * 1.396);
+        JLabel imgLabel = new JLabel("<html><center style='color:gray;'>Loading…</center></html>",
+                SwingConstants.CENTER);
+        imgLabel.setPreferredSize(new Dimension(imgW, imgH));
+        imgLabel.setBorder(BorderFactory.createLineBorder(new Color(80, 80, 80)));
+
+        if (card.getImageUrl() != null) {
+            final String imgUrl = card.getImageUrl();
+            new SwingWorker<ImageIcon, Void>() {
+                @Override protected ImageIcon doInBackground() throws Exception {
+                    java.awt.image.BufferedImage raw = ImageIO.read(new URL(imgUrl));
+                    if (raw == null) return null;
+                    int h = raw.getHeight() * imgW / raw.getWidth();
+                    return new ImageIcon(raw.getScaledInstance(imgW, h, java.awt.Image.SCALE_SMOOTH));
+                }
+                @Override protected void done() {
+                    try {
+                        ImageIcon icon = get();
+                        if (icon != null) {
+                            imgLabel.setIcon(icon);
+                            imgLabel.setText(null);
+                            imgLabel.setPreferredSize(null);
+                            dialog.pack();
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }.execute();
+        }
+
+        // ── Centre: card info ─────────────────────────────────────────────────
+        JPanel info = new JPanel();
+        info.setLayout(new BoxLayout(info, BoxLayout.Y_AXIS));
+        info.setBorder(new EmptyBorder(0, 10, 0, 0));
+
+        JLabel warnLabel = new JLabel("High-Value Card — Please Verify");
+        warnLabel.setFont(warnLabel.getFont().deriveFont(Font.BOLD, 13f));
+        warnLabel.setForeground(new Color(180, 100, 0));
+
+        JLabel nameLabel = new JLabel(card.getName());
+        nameLabel.setFont(nameLabel.getFont().deriveFont(Font.BOLD, 18f));
+
+        String setInfo = card.getSetCode() + "  #" + card.getCollectorNumber();
+        if (card.isReserved()) setInfo += "  [Reserved List]";
+        JLabel setLabel = new JLabel(setInfo);
+        setLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+
+        JLabel priceLabel = new JLabel(String.format("Market Value:  $%.2f", price));
+        priceLabel.setFont(priceLabel.getFont().deriveFont(Font.BOLD, 22f));
+        priceLabel.setForeground(new Color(0, 140, 0));
+
+        JLabel promptLabel = new JLabel(
+                "<html>Physically verify the card before adding it to this trade.</html>");
+        promptLabel.setFont(promptLabel.getFont().deriveFont(Font.PLAIN, 12f));
+
+        info.add(warnLabel);
+        info.add(Box.createVerticalStrut(10));
+        info.add(nameLabel);
+        info.add(Box.createVerticalStrut(4));
+        info.add(setLabel);
+        info.add(Box.createVerticalStrut(14));
+        info.add(priceLabel);
+        info.add(Box.createVerticalStrut(14));
+        info.add(promptLabel);
+
+        // ── Bottom: buttons ───────────────────────────────────────────────────
+        boolean[] confirmed = {false};
+
+        JButton addBtn = new JButton("Add to Trade");
+        addBtn.setFocusPainted(false);
+        addBtn.putClientProperty("JButton.buttonType", "roundRect");
+        addBtn.addActionListener(e -> { confirmed[0] = true; dialog.dispose(); });
+
+        JButton cancelBtn = new JButton("Cancel");
+        cancelBtn.setFocusPainted(false);
+        cancelBtn.putClientProperty("JButton.buttonType", "roundRect");
+        cancelBtn.addActionListener(e -> dialog.dispose());
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.add(cancelBtn);
+        buttons.add(addBtn);
+
+        main.add(imgLabel,  BorderLayout.WEST);
+        main.add(info,      BorderLayout.CENTER);
+        main.add(buttons,   BorderLayout.SOUTH);
+
+        dialog.setContentPane(main);
+        dialog.pack();
+        dialog.setMinimumSize(new Dimension(500, 300));
+        dialog.setLocationRelativeTo(getParentWindow());
+        dialog.setVisible(true); // blocks until closed (modal)
+
+        return confirmed[0];
+    }
+
     private CardImagePopup getImagePopup() {
         if (imagePopup == null) {
             imagePopup = new CardImagePopup(SwingUtilities.getWindowAncestor(this));
@@ -2378,6 +2536,25 @@ public class TradePanel extends JPanel {
             });
         }
         refreshSummary();
+
+        // Fetch image URLs for restored cards in the background so the hover
+        // popup works on the restored rows (stubs have no imageUrl yet).
+        List<Card> stubs = new ArrayList<>();
+        for (TradeItem item : receivedCards) stubs.add(item.getCard());
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                for (Card stub : stubs) {
+                    if ("MISC".equalsIgnoreCase(stub.getSetCode())) continue;
+                    try {
+                        Card fetched = apiService.fetchCard(stub.getSetCode(), stub.getCollectorNumber());
+                        stub.setImageUrl(fetched.getImageUrl());
+                    } catch (Exception ignored) {}
+                    try { Thread.sleep(110); } catch (InterruptedException ignored) { break; }
+                }
+                return null;
+            }
+        }.execute();
     }
 
     /** Writes current table contents to the autosave file. */

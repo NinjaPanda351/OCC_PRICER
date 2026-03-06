@@ -26,7 +26,6 @@ public class TradeSummaryPanel extends JPanel {
                 BorderFactory.createTitledBorder("Value Summary"),
                 new EmptyBorder(10, 15, 10, 15)
         ));
-        setPreferredSize(new Dimension(280, 120));
 
         totalPriceLabel = new JLabel("TOTAL: $0.00 (0 cards)");
         totalPriceLabel.setFont(totalPriceLabel.getFont().deriveFont(Font.BOLD, 18f));
@@ -68,6 +67,7 @@ public class TradeSummaryPanel extends JPanel {
         checkPayoutLabel.setText(String.format("CHECK PAYOUT (%s%%): $%.2f",  checkPct,  checkPayout));
 
         highlightPaymentRate(paymentType);
+        revalidate();
     }
 
     // -------------------------------------------------------------------------

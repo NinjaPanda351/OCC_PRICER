@@ -19,6 +19,7 @@ public class Card {
     private List<String> myFrameEffects;
     private String myArtist;
     private String myImageUrl;
+    private boolean reserved;
 
     /** Constructs a Card with all price fields defaulting to {@code "N/A"}. */
     public Card() {
@@ -264,6 +265,20 @@ public class Card {
      */
     public void setImageUrl(String url) {
         myImageUrl = url;
+    }
+
+    /** Returns {@code true} if this card is on the Magic: The Gathering Reserved List. */
+    public boolean isReserved() {
+        return reserved;
+    }
+
+    /**
+     * Sets whether this card is on the Reserved List.
+     *
+     * @param reserved {@code true} if on the Reserved List
+     */
+    public void setReserved(boolean reserved) {
+        this.reserved = reserved;
     }
 
     // Helper methods

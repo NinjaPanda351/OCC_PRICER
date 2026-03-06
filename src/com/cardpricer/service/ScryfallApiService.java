@@ -3,6 +3,7 @@ package com.cardpricer.service;
 import com.cardpricer.exception.ScryfallApiException;
 import com.cardpricer.model.Card;
 import com.cardpricer.util.SetList;
+import com.cardpricer.util.VintageUtil;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -76,13 +77,16 @@ public class ScryfallApiService {
     public Card fetchCard(final String theSetCode, final String theCollectorNumber)
             throws ScryfallApiException {
         try {
+            // Resolve friendly set-name aliases (e.g. "alpha" → "lea") before the call.
+            String scryfallSetCode = VintageUtil.resolveSetAlias(theSetCode);
+
             // Use the multi-arg URI constructor so that any special characters in the
             // collector number (e.g. ★ for surge foils) are correctly percent-encoded
             // in the path (★ = U+2605 → %E2%98%85).  toASCIIString() returns the
             // fully-encoded URL safe to pass to makeApiCall().
             java.net.URI uri = new java.net.URI(
                     "https", "api.scryfall.com",
-                    "/cards/" + theSetCode.toLowerCase() + "/" + theCollectorNumber,
+                    "/cards/" + scryfallSetCode + "/" + theCollectorNumber,
                     null, null);
             JSONObject json = makeApiCall(uri.toASCIIString());
             return parseCardFromJson(json);
@@ -167,6 +171,7 @@ public class ScryfallApiService {
                     card.setFoilPrice(!prices.isNull("usd_foil") ? prices.getString("usd_foil") : null);
                     card.setEtchedPrice(!prices.isNull("usd_etched") ? prices.getString("usd_etched") : null);
                 }
+                if (json.has("reserved")) card.setReserved(json.getBoolean("reserved"));
                 extractImageUrl(json, card);
                 return card;
             }
@@ -215,6 +220,21 @@ public class ScryfallApiService {
             } else {
                 card.setEtchedPrice(null); // Will be set to "N/A" by setter
             }
+        }
+
+        // Reserved List flag
+        if (json.has("reserved")) {
+            card.setReserved(json.getBoolean("reserved"));
+        }
+
+        // Frame effects (showcase, extendedart, borderless, etched, etc.)
+        if (json.has("frame_effects")) {
+            JSONArray fxArray = json.getJSONArray("frame_effects");
+            List<String> frameEffects = new ArrayList<>();
+            for (int i = 0; i < fxArray.length(); i++) {
+                frameEffects.add(fxArray.getString(i));
+            }
+            card.setFrameEffects(frameEffects);
         }
 
         return card;

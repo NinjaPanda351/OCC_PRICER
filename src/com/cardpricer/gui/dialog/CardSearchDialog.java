@@ -5,6 +5,7 @@ import com.cardpricer.gui.CardImagePopup;
 import com.cardpricer.model.Card;
 import com.cardpricer.service.ScryfallApiService;
 import com.cardpricer.util.CardCodeParser;
+import com.cardpricer.util.VintageUtil;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -118,6 +119,29 @@ public class CardSearchDialog extends JDialog {
         // Set field (fixed width)
         gbc.gridx = 2;
         setCodeField = new JTextField(10);
+        setCodeField.setToolTipText("Enter set code or name — e.g. \"lea\", \"alpha\", \"arabian\"");
+        setCodeField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyReleased(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                    if (searchTimer != null) searchTimer.stop();
+                    performSearch();
+                }
+            }
+        });
+        // Resolve friendly name aliases visually when focus leaves the field
+        setCodeField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                String text = setCodeField.getText().trim();
+                if (!text.isEmpty()) {
+                    String resolved = VintageUtil.resolveSetAlias(text);
+                    if (!resolved.equalsIgnoreCase(text)) {
+                        setCodeField.setText(resolved.toUpperCase());
+                    }
+                }
+            }
+        });
         inputPanel.add(setCodeField, gbc);
 
         panel.add(inputPanel, BorderLayout.CENTER);
@@ -261,10 +285,10 @@ public class CardSearchDialog extends JDialog {
     private List<CardSearchResult> searchCards(String query) throws Exception {
         List<CardSearchResult> results = new ArrayList<>();
 
-        // Append optional set filter before encoding
+        // Append optional set filter before encoding; resolve name aliases first
         String setCode = setCodeField.getText().trim();
         if (!setCode.isEmpty()) {
-            query = query + " set:" + setCode.toLowerCase();
+            query = query + " set:" + VintageUtil.resolveSetAlias(setCode);
         }
 
         // Use Scryfall's search API with fuzzy name matching
@@ -434,6 +458,10 @@ public class CardSearchDialog extends JDialog {
                     String rarityLabel = rarity.substring(0, 1).toUpperCase() + rarity.substring(1);
                     html.append(" <b style='color:").append(rarityColor).append(";'>")
                             .append(rarityLabel).append("</b>");
+                }
+
+                if (card.isReserved()) {
+                    html.append(" <b style='color:#CC7700;'>[RL]</b>");
                 }
 
                 html.append("<br><span style='font-size:11px;'>");
