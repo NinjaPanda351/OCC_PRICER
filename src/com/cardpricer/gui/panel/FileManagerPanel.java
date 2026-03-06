@@ -2,6 +2,7 @@ package com.cardpricer.gui.panel;
 
 import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.model.TradeRecord;
+import com.cardpricer.util.AppTheme;
 import com.cardpricer.service.ReceiptPrintService;
 import com.cardpricer.service.TradeHistoryService;
 
@@ -118,21 +119,8 @@ public class FileManagerPanel extends JPanel {
     private JPanel createTopPanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
-        // Title section
-        JPanel titlePanel = new JPanel();
-        titlePanel.setLayout(new BoxLayout(titlePanel, BoxLayout.Y_AXIS));
-
-        JLabel title = new JLabel("File Manager");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 24f));
-        title.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel subtitle = new JLabel("Download and manage generated files from trades, set pricer, and inventory");
-        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
-        subtitle.setForeground(UIManager.getColor("Label.disabledForeground"));
-
-        titlePanel.add(title);
-        titlePanel.add(Box.createVerticalStrut(4));
-        titlePanel.add(subtitle);
+        JPanel titlePanel = AppTheme.panelHeader("File Manager",
+                "Browse generated files and trade history");
 
         JButton helpBtn = new JButton("?");
         helpBtn.setFocusPainted(false);
@@ -370,10 +358,8 @@ public class FileManagerPanel extends JPanel {
         openFolderButton.setPreferredSize(new Dimension(180, 36));
         openFolderButton.addActionListener(e -> openSelectedFolder());
 
-        JButton deleteButton = new JButton("Delete Selected");
-        deleteButton.setFocusPainted(false);
+        JButton deleteButton = AppTheme.dangerButton("Delete Selected");
         deleteButton.setPreferredSize(new Dimension(140, 36));
-        deleteButton.setForeground(new Color(180, 0, 0));
         deleteButton.addActionListener(e -> deleteSelected());
 
         buttonPanel.add(openFolderButton);

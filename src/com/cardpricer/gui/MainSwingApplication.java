@@ -7,12 +7,15 @@ import com.cardpricer.gui.panel.ManagedPanel;
 import com.cardpricer.gui.panel.PreferencesPanel;
 import com.cardpricer.gui.panel.TradePanel;
 import com.cardpricer.service.UpdateCheckService;
+import com.cardpricer.util.AppTheme;
 import com.cardpricer.util.AppVersion;
 import com.formdev.flatlaf.FlatDarkLaf;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.border.MatteBorder;
 import java.awt.*;
+import java.awt.event.ItemEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.prefs.Preferences;
@@ -61,7 +64,10 @@ public class MainSwingApplication {
         // 1) Apply saved theme (or default to FlatLaf Dark)
         PreferencesPanel.applySavedTheme();
 
-        // 2) Always start Swing on the EDT
+        // 2) Apply FlatLaf polish tweaks (non-color — safe for all 32 themes)
+        AppTheme.applyFlatLafTweaks();
+
+        // 3) Always start Swing on the EDT
         SwingUtilities.invokeLater(() -> new MainSwingApplication().start());
     }
 
@@ -136,7 +142,7 @@ public class MainSwingApplication {
         JPanel sidebar = new JPanel();
         sidebar.setLayout(new BoxLayout(sidebar, BoxLayout.Y_AXIS));
         sidebar.setBorder(new EmptyBorder(18, 18, 18, 18));
-        sidebar.setPreferredSize(new Dimension(260, 0));
+        sidebar.setPreferredSize(new Dimension(220, 0));
 
         JLabel title = new JLabel("OCC Card Pricer");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 18f));
@@ -161,11 +167,11 @@ public class MainSwingApplication {
         // Make nav buttons behave like ToggleButtons (radio group)
         ButtonGroup navGroup = new ButtonGroup();
 
-        JToggleButton btnHome = createNavToggle("Home", navGroup, () -> showScreen(SCREEN_HOME, "Ready"));
-        JToggleButton btnBulk = createNavToggle("Set Pricer", navGroup, () -> showScreen(SCREEN_BULK, "Set Pricer - Ready to process sets"));
-        JToggleButton btnFiles = createNavToggle("File Manager", navGroup, () -> showScreen(SCREEN_FILES, "File Manager - Download generated files"));
-        JToggleButton btnTrades = createNavToggle("Trades", navGroup, () -> showScreen(SCREEN_TRADES, "Trade Management - Ready"));
-        JToggleButton btnInventory = createNavToggle("Inventory Update", navGroup, () -> showScreen(SCREEN_INVENTORY, "Inventory Update - Set card quantities"));
+        JToggleButton btnHome = createNavToggle("\uD83C\uDFE0  Home", navGroup, () -> showScreen(SCREEN_HOME, "Ready"));
+        JToggleButton btnBulk = createNavToggle("\uD83D\uDCE6  Set Pricer", navGroup, () -> showScreen(SCREEN_BULK, "Set Pricer - Ready to process sets"));
+        JToggleButton btnFiles = createNavToggle("\uD83D\uDCC1  File Manager", navGroup, () -> showScreen(SCREEN_FILES, "File Manager - Download generated files"));
+        JToggleButton btnTrades = createNavToggle("\uD83C\uDCCF  Trades", navGroup, () -> showScreen(SCREEN_TRADES, "Trade Management - Ready"));
+        JToggleButton btnInventory = createNavToggle("\uD83D\uDCCB  Inventory", navGroup, () -> showScreen(SCREEN_INVENTORY, "Inventory Update - Set card quantities"));
 
         sidebar.add(btnHome);
         sidebar.add(Box.createVerticalStrut(6));
@@ -188,15 +194,18 @@ public class MainSwingApplication {
         sidebar.add(settingsLabel);
         sidebar.add(Box.createVerticalStrut(8));
 
-        JButton btnPrefs = createActionButton("Preferences", () -> showScreen("preferences", "Preferences"));
-        JButton btnAbout = createActionButton("About", this::showAboutDialog);
+        JButton btnPrefs = createActionButton("\u2699\uFE0F  Preferences", () -> showScreen("preferences", "Preferences"));
+        JButton btnAbout = createActionButton("\u2139\uFE0F  About", this::showAboutDialog);
 
         sidebar.add(btnPrefs);
         sidebar.add(Box.createVerticalStrut(6));
         sidebar.add(btnAbout);
 
-        // Default selection
+        // Default selection — also apply the active border immediately
         btnHome.setSelected(true);
+        btnHome.setBorder(BorderFactory.createCompoundBorder(
+                new MatteBorder(0, 3, 0, 0, AppTheme.ACCENT),
+                new EmptyBorder(10, 9, 10, 12)));
 
         return sidebar;
     }
@@ -212,6 +221,17 @@ public class MainSwingApplication {
 
         // FlatLaf supports styling via client properties
         b.putClientProperty("JButton.buttonType", "roundRect");
+
+        // Active-state indicator: 3px left accent bar (MatteBorder only — FlatLaf owns fill/hover)
+        b.addItemListener(e -> {
+            if (e.getStateChange() == ItemEvent.SELECTED) {
+                b.setBorder(BorderFactory.createCompoundBorder(
+                        new MatteBorder(0, 3, 0, 0, AppTheme.ACCENT),
+                        new EmptyBorder(10, 9, 10, 12)));
+            } else {
+                b.setBorder(new EmptyBorder(10, 12, 10, 12));
+            }
+        });
 
         b.addActionListener(e -> onClick.run());
         return b;
@@ -285,7 +305,7 @@ public class MainSwingApplication {
 
         JLabel title = new JLabel("Welcome to OCC Card Pricer");
         title.setAlignmentX(Component.CENTER_ALIGNMENT);
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 28f));
+        title.setFont(AppTheme.FONT_TITLE);
 
         JLabel subtitle = new JLabel("Your all-in-one Magic: The Gathering card management platform");
         subtitle.setAlignmentX(Component.CENTER_ALIGNMENT);
@@ -299,9 +319,9 @@ public class MainSwingApplication {
         panel.add(Box.createVerticalStrut(20));
 
         JPanel cards = new JPanel(new GridLayout(1, 3, 16, 16));
-        cards.add(createFeatureCard("Set pricer", "Fetch prices for entire sets"));
-        cards.add(createFeatureCard("Manual Entry", "Add individual cards"));
-        cards.add(createFeatureCard("Search", "Find cards instantly"));
+        cards.add(createFeatureCard("\uD83D\uDCE6 Set Pricer", "Fetch real-time prices for entire sets"));
+        cards.add(createFeatureCard("\uD83C\uDCCF Trades", "Receive and price trade-in cards"));
+        cards.add(createFeatureCard("\uD83D\uDCC1 File Manager", "Browse generated CSVs and trade history"));
 
         panel.add(cards);
         panel.add(Box.createVerticalGlue());
@@ -311,7 +331,7 @@ public class MainSwingApplication {
     private JComponent createFeatureCard(String title, String description) {
         JPanel card = new JPanel();
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
-        card.setBorder(new EmptyBorder(18, 18, 18, 18));
+        card.setBorder(new EmptyBorder(22, 22, 22, 22));
         card.putClientProperty("JComponent.roundRect", true);
 
         JLabel t = new JLabel(title);

@@ -4,12 +4,12 @@ import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.model.Card;
 import com.cardpricer.service.CsvExportService;
 import com.cardpricer.service.ScryfallApiService;
+import com.cardpricer.util.AppTheme;
 import com.cardpricer.util.CardConstants;
 import com.cardpricer.util.SetList;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
-import javax.swing.border.TitledBorder;
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -130,14 +130,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
     private JPanel createSetSelectorPanel() {
         JPanel panel = new JPanel(new BorderLayout(5, 5));
-        panel.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(Color.WHITE, 2),
-                "Select Sets",
-                TitledBorder.LEFT,
-                TitledBorder.TOP,
-                null,
-                Color.WHITE
-        ));
+        panel.setBorder(AppTheme.sectionBorder("Select Sets"));
 
         // Search and control panel
         JPanel topPanel = new JPanel(new BorderLayout(5, 5));
@@ -276,14 +269,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
     private JPanel createConfigPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
-        panel.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(Color.WHITE, 2),
-                "Export Configuration",
-                TitledBorder.LEFT,
-                TitledBorder.TOP,
-                null,
-                Color.WHITE
-        ));
+        panel.setBorder(AppTheme.sectionBorder("Export Configuration"));
 
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(8, 8, 8, 8);
@@ -343,9 +329,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.NONE;
         gbc.anchor = GridBagConstraints.CENTER;
-        fetchButton = new JButton("Fetch Selected Sets");
-        fetchButton.setFocusPainted(false);
-        fetchButton.putClientProperty("JButton.buttonType", "roundRect");
+        fetchButton = AppTheme.primaryButton("Fetch Selected Sets");
         fetchButton.setFont(fetchButton.getFont().deriveFont(Font.BOLD, 14f));
         fetchButton.addActionListener(e -> fetchMultipleSets());
         panel.add(fetchButton, gbc);
@@ -362,14 +346,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
         logArea.setText("Ready to fetch card prices...\nSelect sets and click 'Fetch Selected Sets'\n");
 
         JScrollPane scrollPane = new JScrollPane(logArea);
-        scrollPane.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createLineBorder(Color.WHITE, 2),
-                "Process Log",
-                TitledBorder.LEFT,
-                TitledBorder.TOP,
-                null,
-                Color.WHITE
-        ));
+        scrollPane.setBorder(AppTheme.sectionBorder("Process Log"));
 
         panel.add(scrollPane, BorderLayout.CENTER);
 

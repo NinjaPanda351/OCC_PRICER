@@ -7,7 +7,7 @@ package com.cardpricer.util;
 public final class AppVersion {
 
     /** Current application version — update this with each release. */
-    public static final String CURRENT = "3.2.0";
+    public static final String CURRENT = "3.3.0";
 
     /** GitHub owner/repo used by {@link com.cardpricer.service.UpdateCheckService}. */
     public static final String GITHUB_OWNER = "NinjaPanda351";

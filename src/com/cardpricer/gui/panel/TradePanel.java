@@ -3,6 +3,9 @@ package com.cardpricer.gui.panel;
 import com.cardpricer.gui.CardImagePopup;
 import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.gui.dialog.CardSearchDialog;
+import com.cardpricer.gui.dialog.PasteImportDialog;
+import com.cardpricer.gui.dialog.PasteImportDialog.FetchedResult;
+import com.cardpricer.gui.dialog.PriceCheckDialog;
 import com.cardpricer.gui.panel.trade.PaymentTypePanel;
 import com.cardpricer.gui.panel.trade.TradeSummaryPanel;
 import com.cardpricer.model.Card;
@@ -12,8 +15,10 @@ import com.cardpricer.service.BuyRateService;
 import com.cardpricer.service.PricingService;
 import com.cardpricer.service.ReceiptPrintService;
 import com.cardpricer.service.ScryfallApiService;
+import com.cardpricer.service.ScryfallCatalogService;
 import com.cardpricer.service.TradeReceivingExportService;
 import com.cardpricer.service.TradeSessionService;
+import com.cardpricer.util.AppTheme;
 import com.cardpricer.util.CardCodeParser;
 import com.cardpricer.util.CardConstants;
 import com.cardpricer.util.VintageUtil;
@@ -44,6 +49,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.prefs.Preferences;
+import java.util.function.BiConsumer;
 
 /**
  * Quick-entry panel for receiving cards from trades and purchases.
@@ -75,6 +81,8 @@ public class TradePanel extends JPanel {
         {"Ctrl+Z",         "Undo the last added card"},
         {"Ctrl+F / F2",    "Search for a card by name"},
         {"/",              "Jump to card code field"},
+        {"Ctrl+Space",              "Quick price check (floats alongside trade)"},
+        {"Ctrl+L / [Paste List]",   "Paste a list of card codes to import at once"},
         {"F4 / [Vintage]", "Show vintage set code reference"},
         {"F1 / [?]",       "Show this help dialog"},
         {"--- Code Formats", ""},
@@ -176,7 +184,10 @@ public class TradePanel extends JPanel {
         setLayout(new BorderLayout(15, 15));
         setBorder(new EmptyBorder(20, 20, 20, 20));
 
-        add(createInputPanel(), BorderLayout.NORTH);
+        JPanel topWrapper = new JPanel(new BorderLayout(0, 10));
+        topWrapper.add(AppTheme.panelHeader("Trades", "Receive and price trade-ins"), BorderLayout.NORTH);
+        topWrapper.add(createInputPanel(), BorderLayout.CENTER);
+        add(topWrapper, BorderLayout.NORTH);
         add(createTablePanel(), BorderLayout.CENTER);
         add(createBottomPanel(), BorderLayout.SOUTH);
 
@@ -228,6 +239,25 @@ public class TradePanel extends JPanel {
             @Override
             public void actionPerformed(ActionEvent e) {
                 cardCodeField.requestFocusInWindow();
+            }
+        });
+
+        // Ctrl+Space → quick price check dialog
+        panelIM.put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, InputEvent.CTRL_DOWN_MASK), "priceCheck");
+        panelAM.put("priceCheck", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                PriceCheckDialog.show(SwingUtilities.getWindowAncestor(TradePanel.this),
+                        (card, finish) -> addFetchedCard(card, finish, card.getSetCode()));
+            }
+        });
+
+        // Ctrl+L → paste import dialog
+        panelIM.put(KeyStroke.getKeyStroke(KeyEvent.VK_L, InputEvent.CTRL_DOWN_MASK), "pasteImport");
+        panelAM.put("pasteImport", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                showPasteImportDialog();
             }
         });
 
@@ -836,26 +866,26 @@ public class TradePanel extends JPanel {
     private JPanel createBottomPanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
-        // ── Row 1: Search | Clear | Undo | Vintage Sets ───────────────────────
-        JButton searchBtn  = new JButton("Search by Name (Ctrl+F)");
-        JButton clearBtn   = new JButton("Clear All");
-        undoBtn = new JButton("Undo (Ctrl+Z)");
+        // ── Row 1: Search | Clear | Undo | Vintage Sets | Paste List ─────────
+        JButton searchBtn    = AppTheme.secondaryButton("Search by Name (Ctrl+F)");
+        JButton clearBtn     = AppTheme.dangerButton("Clear All");
+        undoBtn = AppTheme.secondaryButton("Undo (Ctrl+Z)");
         undoBtn.setEnabled(false);
-        JButton vintageBtn = new JButton("Vintage Sets (F4)");
+        JButton vintageBtn   = AppTheme.secondaryButton("Vintage Sets (F4)");
+        JButton pasteListBtn = AppTheme.secondaryButton("Paste List (Ctrl+L)");
 
         // ── Row 2: Export POS | Save List | Print Receipt | Save as PDF ───────
-        JButton exportInventoryBtn = new JButton("Export to POS (CSV)");
-        JButton saveListBtn        = new JButton("Save Card List");
-        printReceiptBtn = new JButton("Print Receipt");
-        savePdfBtn      = new JButton("Save as PDF");
+        JButton exportInventoryBtn = AppTheme.secondaryButton("Export to POS (CSV)");
+        JButton saveListBtn        = AppTheme.primaryButton("Save Card List");
+        printReceiptBtn = AppTheme.secondaryButton("Print Receipt");
+        savePdfBtn      = AppTheme.secondaryButton("Save as PDF");
         printReceiptBtn.setEnabled(false);
         savePdfBtn.setEnabled(false);
 
         // Apply consistent sizing
         for (JButton btn : new JButton[]{
-                searchBtn, clearBtn, undoBtn, vintageBtn,
+                searchBtn, clearBtn, undoBtn, vintageBtn, pasteListBtn,
                 exportInventoryBtn, saveListBtn, printReceiptBtn, savePdfBtn}) {
-            btn.setFocusPainted(false);
             btn.setPreferredSize(new Dimension(165, 36));
         }
 
@@ -863,6 +893,7 @@ public class TradePanel extends JPanel {
         clearBtn.addActionListener(e -> clearAll());
         vintageBtn.addActionListener(e -> showVintageReference());
         undoBtn.addActionListener(e -> undoLastCard());
+        pasteListBtn.addActionListener(e -> showPasteImportDialog());
         exportInventoryBtn.addActionListener(e -> exportToPOS());
         saveListBtn.addActionListener(e -> saveList());
         printReceiptBtn.addActionListener(e -> doPrintReceipt());
@@ -873,6 +904,7 @@ public class TradePanel extends JPanel {
         row1.add(clearBtn);
         row1.add(undoBtn);
         row1.add(vintageBtn);
+        row1.add(pasteListBtn);
 
         JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         row2.add(exportInventoryBtn);
@@ -953,6 +985,9 @@ public class TradePanel extends JPanel {
         new SwingWorker<Card, Void>() {
             @Override
             protected Card doInBackground() throws Exception {
+                java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
+                        .lookup(parsed.setCode, parsed.collectorNumber);
+                if (hit.isPresent()) return hit.get();
                 return apiService.fetchCard(parsed.setCode, parsed.collectorNumber);
             }
 
@@ -1004,6 +1039,9 @@ public class TradePanel extends JPanel {
         new SwingWorker<Card, Void>() {
             @Override
             protected Card doInBackground() throws Exception {
+                java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
+                        .lookup(parsed.setCode, parsed.collectorNumber);
+                if (hit.isPresent()) return hit.get();
                 return apiService.fetchCard(parsed.setCode, parsed.collectorNumber);
             }
 
@@ -1571,6 +1609,102 @@ public class TradePanel extends JPanel {
         clearPreview();
         cardCodeField.requestFocusInWindow();
     }
+
+    // -------------------------------------------------------------------------
+    // Programmatic card additions (PriceCheckDialog / PasteImportDialog)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Adds a pre-fetched card to the trade table.
+     * Used by {@link PriceCheckDialog} and {@link PasteImportDialog}; skips
+     * high-value prompts, undo tracking, and code-field clearing since those
+     * belong to the manual-entry flow.
+     *
+     * <p>Silently skips if the chosen finish has no price available.
+     *
+     * @param card            fetched card data
+     * @param finishType      finish code: {@code ""} normal, {@code "F"} foil,
+     *                        {@code "E"} etched, {@code "S"} surge foil
+     * @param originalSetCode original set code as entered (e.g. {@code "plst"} for
+     *                        PLST display, or {@code card.getSetCode()} otherwise)
+     */
+    public void addFetchedCard(Card card, String finishType, String originalSetCode) {
+        boolean isFoil = !finishType.isEmpty();
+
+        // Skip silently if the chosen finish has no price
+        boolean hasPrice;
+        if ("F".equals(finishType) || "S".equals(finishType)) {
+            hasPrice = card.hasFoilPrice();
+        } else if ("E".equals(finishType)) {
+            hasPrice = card.hasEtchedPrice();
+        } else {
+            hasPrice = card.hasNormalPrice();
+        }
+        if (!hasPrice) return;
+
+        TradeItem item = new TradeItem(card, isFoil, 1, finishType);
+        receivedCards.add(item);
+        cardConditions.add("NM");
+        rowPayouts.add(null); // overwritten immediately by refreshSummary()
+
+        String baseCode = "plst".equalsIgnoreCase(originalSetCode)
+                ? "PLST " + card.getSetCode() + " " + card.getCollectorNumber()
+                : card.getSetCode() + " " + card.getCollectorNumber();
+
+        String code = baseCode;
+        if (isFoil) {
+            if ("E".equals(finishType)) {
+                code += "e";
+            } else if ("S".equals(finishType)) {
+                code += "s";
+            } else {
+                code += "f";
+            }
+        }
+
+        StringBuilder name = new StringBuilder(card.getName());
+        if (card.getFrameEffectDisplay() != null) {
+            name.append(" - ").append(card.getFrameEffectDisplay());
+        }
+        if (isFoil) {
+            String finishLabel = "E".equals(finishType) ? "Etched"
+                    : "S".equals(finishType) ? "Surge Foil" : "Foil";
+            name.append(" (").append(finishLabel).append(")");
+        }
+
+        BigDecimal roundedPrice = pricingService.applyPricingRules(item.getUnitPrice(), card.getRarity());
+
+        tableModel.addRow(new Object[]{
+                false,
+                code,
+                name.toString(),
+                "NM",
+                1,
+                String.format("$%.2f", roundedPrice),
+                String.format("$%.2f", roundedPrice),
+                ""
+        });
+
+        refreshSummary();
+
+        // Scroll to and select the newly added row
+        int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
+        cardTable.setRowSelectionInterval(viewRow, viewRow);
+        cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
+    }
+
+    private void showPasteImportDialog() {
+        PasteImportDialog dlg = new PasteImportDialog(
+                SwingUtilities.getWindowAncestor(this),
+                apiService,
+                results -> results.stream()
+                        .filter(FetchedResult::ok)
+                        .forEach(r -> addFetchedCard(r.card(), r.parsed().finish, r.parsed().setCode))
+        );
+        dlg.setVisible(true);
+    }
+
+    // -------------------------------------------------------------------------
 
     /** Removes the most recently added card. Single-level undo. */
     private void undoLastCard() {
@@ -2544,8 +2678,16 @@ public class TradePanel extends JPanel {
         new SwingWorker<Void, Void>() {
             @Override
             protected Void doInBackground() {
+                ScryfallCatalogService catalog = ScryfallCatalogService.getInstance();
                 for (Card stub : stubs) {
                     if ("MISC".equalsIgnoreCase(stub.getSetCode())) continue;
+                    // Try catalog first — no network call, no sleep needed
+                    java.util.Optional<Card> hit = catalog.lookup(
+                            stub.getSetCode(), stub.getCollectorNumber());
+                    if (hit.isPresent() && hit.get().getImageUrl() != null) {
+                        stub.setImageUrl(hit.get().getImageUrl());
+                        continue;
+                    }
                     try {
                         Card fetched = apiService.fetchCard(stub.getSetCode(), stub.getCollectorNumber());
                         stub.setImageUrl(fetched.getImageUrl());

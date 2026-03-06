@@ -2,8 +2,10 @@ package com.cardpricer.gui.panel;
 
 import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.model.BountyCard;
+import com.cardpricer.util.AppTheme;
 import com.cardpricer.model.BuyRateRule;
 import com.cardpricer.service.BuyRateService;
+import com.cardpricer.service.ScryfallCatalogService;
 import com.formdev.flatlaf.*;
 import com.formdev.flatlaf.themes.*;
 
@@ -50,6 +52,9 @@ public class PreferencesPanel extends JPanel {
         {"Import and Replace", "Clear all bounties first, then import"},
         {"Export CSV",      "Export current bounty table to a CSV file"},
         {"Save Bounties",   "Persist bounty changes to disk"},
+        {"--- Card Catalog", ""},
+        {"Download Catalog", "Download the full Scryfall card list for instant paste-import (~30 MB download)"},
+        {"Load into Memory", "Load an existing catalog file into memory for this session"},
     };
 
     /**
@@ -119,6 +124,14 @@ public class PreferencesPanel extends JPanel {
     private JButton applyButton;
     private JTextField sharedFolderField;
 
+    // Card Catalog tab state
+    private JLabel     catalogStatusLabel;
+    private JLabel     catalogAgeLabel;
+    private JProgressBar catalogProgressBar;
+    private JLabel     catalogProgressLabel;
+    private JButton    downloadCatalogBtn;
+    private JButton    loadCatalogBtn;
+
     // Buy Rates tab state
     private final BuyRateService buyRateService = new BuyRateService();
     private DefaultTableModel rulesTableModel;
@@ -137,20 +150,8 @@ public class PreferencesPanel extends JPanel {
     }
 
     private JPanel createTopPanel() {
-        JPanel titlePanel = new JPanel();
-        titlePanel.setLayout(new BoxLayout(titlePanel, BoxLayout.Y_AXIS));
-
-        JLabel title = new JLabel("Preferences");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 24f));
-        title.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel subtitle = new JLabel("Customize your application settings");
-        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
-        subtitle.setForeground(UIManager.getColor("Label.disabledForeground"));
-
-        titlePanel.add(title);
-        titlePanel.add(Box.createVerticalStrut(4));
-        titlePanel.add(subtitle);
+        JPanel titlePanel = AppTheme.panelHeader("Preferences",
+                "Appearance, network & buy rates");
 
         JButton helpBtn = new JButton("?");
         helpBtn.setFocusPainted(false);
@@ -170,9 +171,10 @@ public class PreferencesPanel extends JPanel {
 
     private JTabbedPane createTabbedSettings() {
         JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("Appearance", createAppearanceTab());
-        tabs.addTab("Network",    createNetworkTab());
-        tabs.addTab("Buy Rates",  createBuyRatesTab());
+        tabs.addTab("Appearance",   createAppearanceTab());
+        tabs.addTab("Network",      createNetworkTab());
+        tabs.addTab("Buy Rates",    createBuyRatesTab());
+        tabs.addTab("Card Catalog", createCatalogTab());
         return tabs;
     }
 
@@ -232,8 +234,7 @@ public class PreferencesPanel extends JPanel {
         JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         btnRow.setOpaque(false);
 
-        JButton saveBtn = new JButton("Save");
-        saveBtn.setFocusPainted(false);
+        JButton saveBtn = AppTheme.primaryButton("Save");
         saveBtn.addActionListener(e -> saveSharedFolder());
 
         JButton testBtn = new JButton("Test Connection");
@@ -335,7 +336,7 @@ public class PreferencesPanel extends JPanel {
         JButton addRowBtn = new JButton("Add Row");
         addRowBtn.addActionListener(e -> rulesTableModel.addRow(new String[]{"0.00", "50", "33"}));
 
-        JButton removeRowBtn = new JButton("Remove Selected");
+        JButton removeRowBtn = AppTheme.dangerButton("Remove Selected");
         removeRowBtn.addActionListener(e -> {
             int row = rulesTable.getSelectedRow();
             if (row < 0) return;
@@ -351,7 +352,7 @@ public class PreferencesPanel extends JPanel {
             rulesTableModel.removeRow(row);
         });
 
-        JButton saveRulesBtn = new JButton("Save Rules");
+        JButton saveRulesBtn = AppTheme.primaryButton("Save Rules");
         saveRulesBtn.addActionListener(e -> saveRules());
 
         buyRatesStatusLabel = new JLabel(" ");
@@ -415,10 +416,10 @@ public class PreferencesPanel extends JPanel {
 
         JPanel bountyBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         JButton addBountyBtn    = new JButton("Add Bounty");
-        JButton removeBountyBtn = new JButton("Remove Selected");
+        JButton removeBountyBtn = AppTheme.dangerButton("Remove Selected");
         JButton importCsvBtn    = new JButton("Import CSV");
         JButton exportCsvBtn    = new JButton("Export CSV");
-        JButton saveBountiesBtn = new JButton("Save Bounties");
+        JButton saveBountiesBtn = AppTheme.primaryButton("Save Bounties");
 
         bountiesStatusLabel = new JLabel(" ");
         bountiesStatusLabel.setFont(bountiesStatusLabel.getFont().deriveFont(Font.ITALIC, 11f));
@@ -753,6 +754,231 @@ public class PreferencesPanel extends JPanel {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Card Catalog tab
+    // -------------------------------------------------------------------------
+
+    private JPanel createCatalogTab() {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(new EmptyBorder(15, 10, 10, 10));
+
+        // ── Status section ────────────────────────────────────────────────────
+        JPanel statusSection = new JPanel(new GridBagLayout());
+        statusSection.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder("Catalog Status"),
+                new EmptyBorder(10, 12, 10, 12)));
+        statusSection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 140));
+        statusSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets  = new Insets(4, 5, 4, 5);
+        gbc.anchor  = GridBagConstraints.WEST;
+        gbc.fill    = GridBagConstraints.HORIZONTAL;
+
+        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0;
+        statusSection.add(new JLabel("Status:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        catalogStatusLabel = new JLabel("Checking\u2026");
+        statusSection.add(catalogStatusLabel, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 0;
+        statusSection.add(new JLabel("Last updated:"), gbc);
+        gbc.gridx = 1; gbc.weightx = 1.0;
+        catalogAgeLabel = new JLabel("\u2014");
+        catalogAgeLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+        statusSection.add(catalogAgeLabel, gbc);
+
+        panel.add(statusSection);
+        panel.add(Box.createVerticalStrut(10));
+
+        // ── Description / warning ─────────────────────────────────────────────
+        JLabel descLabel = new JLabel(
+                "<html>The card catalog downloads Scryfall\u2019s full card list (~30\u00a0MB download, "
+                + "~15\u00a0MB saved to disk).<br>Once loaded, paste-import resolves all cards "
+                + "instantly without individual API calls.</html>");
+        descLabel.setFont(descLabel.getFont().deriveFont(Font.ITALIC, 11f));
+        descLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+        descLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.add(descLabel);
+        panel.add(Box.createVerticalStrut(12));
+
+        // ── Buttons row ───────────────────────────────────────────────────────
+        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        btnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        downloadCatalogBtn = AppTheme.primaryButton("Download / Refresh Catalog");
+        downloadCatalogBtn.addActionListener(e -> startCatalogDownload());
+
+        loadCatalogBtn = new JButton("Load into Memory");
+        loadCatalogBtn.setFocusPainted(false);
+        loadCatalogBtn.addActionListener(e -> startCatalogLoad());
+
+        btnRow.add(downloadCatalogBtn);
+        btnRow.add(loadCatalogBtn);
+        panel.add(btnRow);
+        panel.add(Box.createVerticalStrut(10));
+
+        // ── Progress area (hidden until an operation starts) ──────────────────
+        JPanel progressSection = new JPanel(new BorderLayout(0, 4));
+        progressSection.setAlignmentX(Component.LEFT_ALIGNMENT);
+        progressSection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 60));
+
+        catalogProgressLabel = new JLabel(" ");
+        catalogProgressLabel.setFont(catalogProgressLabel.getFont().deriveFont(Font.ITALIC, 11f));
+        catalogProgressBar   = new JProgressBar(0, 100);
+        catalogProgressBar.setStringPainted(true);
+        catalogProgressBar.setIndeterminate(true);
+        catalogProgressBar.setVisible(false);
+        catalogProgressLabel.setVisible(false);
+
+        progressSection.add(catalogProgressLabel, BorderLayout.NORTH);
+        progressSection.add(catalogProgressBar,   BorderLayout.CENTER);
+        panel.add(progressSection);
+        panel.add(Box.createVerticalGlue());
+
+        // Populate status immediately
+        refreshCatalogStatus();
+        return panel;
+    }
+
+    /** Refreshes the catalog status labels from the current ScryfallCatalogService state. */
+    private void refreshCatalogStatus() {
+        ScryfallCatalogService catalog = ScryfallCatalogService.getInstance();
+
+        if (catalog.isLoaded()) {
+            catalogStatusLabel.setText("Loaded in memory \u2014 "
+                    + String.format("%,d", catalog.getCardCount()) + " cards");
+            catalogStatusLabel.setForeground(AppTheme.SUCCESS);
+        } else if (catalog.isCatalogAvailable()) {
+            catalogStatusLabel.setText("Available on disk \u2014 not yet loaded into memory");
+            catalogStatusLabel.setForeground(UIManager.getColor("Label.foreground"));
+        } else {
+            catalogStatusLabel.setText("Not downloaded");
+            catalogStatusLabel.setForeground(AppTheme.DANGER);
+        }
+
+        if (catalog.isCatalogAvailable()) {
+            long ageMs  = catalog.getCacheAgeMs();
+            long days   = ageMs / 86_400_000L;
+            long hours  = (ageMs % 86_400_000L) / 3_600_000L;
+            if (days > 0) {
+                catalogAgeLabel.setText(days + " day" + (days == 1 ? "" : "s") + " ago");
+            } else {
+                catalogAgeLabel.setText(hours + " hour" + (hours == 1 ? "" : "s") + " ago");
+            }
+            catalogAgeLabel.setForeground(days >= 7
+                    ? new Color(0xD97706) : UIManager.getColor("Label.disabledForeground"));
+        } else {
+            catalogAgeLabel.setText("Never");
+        }
+
+        // Show "Load" button only when cache exists but is not in memory
+        loadCatalogBtn.setVisible(catalog.isCatalogAvailable() && !catalog.isLoaded());
+    }
+
+    /** Downloads (or re-downloads) the Scryfall catalog in a background worker. */
+    private void startCatalogDownload() {
+        downloadCatalogBtn.setEnabled(false);
+        loadCatalogBtn.setEnabled(false);
+        catalogProgressBar.setIndeterminate(false);
+        catalogProgressBar.setValue(0);
+        catalogProgressBar.setVisible(true);
+        catalogProgressLabel.setVisible(true);
+        catalogProgressLabel.setText("Starting download\u2026");
+
+        new javax.swing.SwingWorker<Void, String>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                // Capture cancel state before entering anonymous inner class
+                java.util.function.BooleanSupplier cancelCheck = this::isCancelled;
+                ScryfallCatalogService.getInstance().downloadAndBuild(
+                        new ScryfallCatalogService.DownloadProgress() {
+                            @Override
+                            public void onUpdate(int cardsProcessed, String phase) {
+                                publish(cardsProcessed + "\t" + phase);
+                            }
+                            @Override
+                            public boolean isCancelled() {
+                                return cancelCheck.getAsBoolean();
+                            }
+                        });
+                return null;
+            }
+
+            @Override
+            protected void process(java.util.List<String> chunks) {
+                String last = chunks.get(chunks.size() - 1);
+                String[] parts = last.split("\t", 2);
+                try {
+                    int count = Integer.parseInt(parts[0]);
+                    catalogProgressLabel.setText(parts.length > 1 ? parts[1] : " ");
+                    // Show rough progress once card count is meaningful
+                    if (count > 0 && !catalogProgressBar.isIndeterminate()) {
+                        // Approx 300k total cards; clamp to 99 until done
+                        int pct = Math.min(99, count * 100 / 300_000);
+                        catalogProgressBar.setValue(pct);
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+
+            @Override
+            protected void done() {
+                catalogProgressBar.setValue(100);
+                try {
+                    get(); // re-throws any exception from doInBackground
+                    catalogProgressLabel.setText("Catalog downloaded and ready.");
+                    catalogProgressLabel.setForeground(AppTheme.SUCCESS);
+                } catch (java.util.concurrent.CancellationException ignored) {
+                    catalogProgressLabel.setText("Download cancelled.");
+                    catalogProgressLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+                } catch (Exception ex) {
+                    String msg = ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage();
+                    catalogProgressLabel.setText("Error: " + msg);
+                    catalogProgressLabel.setForeground(AppTheme.DANGER);
+                }
+                downloadCatalogBtn.setEnabled(true);
+                loadCatalogBtn.setEnabled(true);
+                refreshCatalogStatus();
+            }
+        }.execute();
+    }
+
+    /** Loads an existing catalog file from disk into memory in a background worker. */
+    private void startCatalogLoad() {
+        downloadCatalogBtn.setEnabled(false);
+        loadCatalogBtn.setEnabled(false);
+        catalogProgressBar.setIndeterminate(true);
+        catalogProgressBar.setVisible(true);
+        catalogProgressLabel.setVisible(true);
+        catalogProgressLabel.setForeground(UIManager.getColor("Label.foreground"));
+        catalogProgressLabel.setText("Loading catalog from disk\u2026");
+
+        new javax.swing.SwingWorker<Integer, Void>() {
+            @Override
+            protected Integer doInBackground() throws Exception {
+                return ScryfallCatalogService.getInstance().loadFromDisk();
+            }
+            @Override
+            protected void done() {
+                catalogProgressBar.setIndeterminate(false);
+                catalogProgressBar.setValue(100);
+                try {
+                    int count = get();
+                    catalogProgressLabel.setText("Loaded " + String.format("%,d", count) + " cards.");
+                    catalogProgressLabel.setForeground(AppTheme.SUCCESS);
+                } catch (Exception ex) {
+                    String msg = ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage();
+                    catalogProgressLabel.setText("Load failed: " + msg);
+                    catalogProgressLabel.setForeground(AppTheme.DANGER);
+                }
+                downloadCatalogBtn.setEnabled(true);
+                loadCatalogBtn.setEnabled(true);
+                refreshCatalogStatus();
+            }
+        }.execute();
+    }
+
     private JPanel createThemeSection() {
         JPanel section = new JPanel(new BorderLayout(10, 10));
         section.setBorder(BorderFactory.createCompoundBorder(
@@ -787,8 +1013,7 @@ public class PreferencesPanel extends JPanel {
 
         gbc.gridx = 2;
         gbc.weightx = 0;
-        applyButton = new JButton("Apply");
-        applyButton.setFocusPainted(false);
+        applyButton = AppTheme.primaryButton("Apply");
         applyButton.setPreferredSize(new Dimension(100, 32));
         applyButton.addActionListener(e -> applyTheme());
         content.add(applyButton, gbc);

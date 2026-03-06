@@ -1,7 +1,8 @@
 package com.cardpricer.gui.panel.trade;
 
+import com.cardpricer.util.AppTheme;
+
 import javax.swing.*;
-import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -22,13 +23,10 @@ public class TradeSummaryPanel extends JPanel {
     /** Constructs the summary panel and initialises all value labels to zero. */
     public TradeSummaryPanel() {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
-        setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("Value Summary"),
-                new EmptyBorder(10, 15, 10, 15)
-        ));
+        setBorder(AppTheme.sectionBorder("Value Summary"));
 
         totalPriceLabel = new JLabel("TOTAL: $0.00 (0 cards)");
-        totalPriceLabel.setFont(totalPriceLabel.getFont().deriveFont(Font.BOLD, 18f));
+        totalPriceLabel.setFont(totalPriceLabel.getFont().deriveFont(Font.BOLD, 20f));
         totalPriceLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         creditPayoutLabel = new JLabel("CREDIT PAYOUT (50%): $0.00");
@@ -99,10 +97,10 @@ public class TradeSummaryPanel extends JPanel {
 
         if ("credit".equals(paymentType)) {
             creditPayoutLabel.setFont(creditPayoutLabel.getFont().deriveFont(Font.BOLD, 16f));
-            creditPayoutLabel.setForeground(new Color(0, 150, 0));
+            creditPayoutLabel.setForeground(AppTheme.SUCCESS);
         } else if ("check".equals(paymentType)) {
             checkPayoutLabel.setFont(checkPayoutLabel.getFont().deriveFont(Font.BOLD, 16f));
-            checkPayoutLabel.setForeground(new Color(0, 150, 0));
+            checkPayoutLabel.setForeground(AppTheme.SUCCESS);
         }
     }
 }
