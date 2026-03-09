@@ -266,7 +266,7 @@ public class FileManagerPanel extends JPanel {
             JOptionPane.showMessageDialog(this, "Please select a file.", "No Selection", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        String filePath = (String) sharedTableModel.getValueAt(row, 4);
+        String filePath = (String) sharedTableModel.getValueAt(sharedTable.convertRowIndexToModel(row), 4);
         try {
             if (Desktop.isDesktopSupported()) {
                 Desktop.getDesktop().open(new File(filePath));
@@ -282,8 +282,9 @@ public class FileManagerPanel extends JPanel {
             JOptionPane.showMessageDialog(this, "Please select a file.", "No Selection", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        String srcPath = (String) sharedTableModel.getValueAt(row, 4);
-        String filename = (String) sharedTableModel.getValueAt(row, 0);
+        int modelRow = sharedTable.convertRowIndexToModel(row);
+        String srcPath = (String) sharedTableModel.getValueAt(modelRow, 4);
+        String filename = (String) sharedTableModel.getValueAt(modelRow, 0);
         File src  = new File(srcPath);
         File localDir = com.cardpricer.util.AppDataDirectory.trades();
         if (!localDir.exists()) localDir.mkdirs();
@@ -756,8 +757,9 @@ public class FileManagerPanel extends JPanel {
 
         for (int selectedRow : selectedRows) {
             try {
-                String sourcePath = (String) tableModel.getValueAt(selectedRow, 4);
-                String filename = (String) tableModel.getValueAt(selectedRow, 0);
+                int modelRow = fileTable.convertRowIndexToModel(selectedRow);
+                String sourcePath = (String) tableModel.getValueAt(modelRow, 4);
+                String filename = (String) tableModel.getValueAt(modelRow, 0);
 
                 File sourceFile = new File(sourcePath);
                 File destFile = new File(destinationDir, filename);
@@ -795,7 +797,7 @@ public class FileManagerPanel extends JPanel {
             return;
         }
 
-        String filePath = (String) tableModel.getValueAt(selectedRow, 4);
+        String filePath = (String) tableModel.getValueAt(fileTable.convertRowIndexToModel(selectedRow), 4);
         File file = new File(filePath);
         File parentDir = file.getParentFile();
 
@@ -849,7 +851,7 @@ public class FileManagerPanel extends JPanel {
 
         for (int selectedRow : selectedRows) {
             try {
-                String filePath = (String) tableModel.getValueAt(selectedRow, 4);
+                String filePath = (String) tableModel.getValueAt(fileTable.convertRowIndexToModel(selectedRow), 4);
                 File file = new File(filePath);
 
                 if (file.delete()) {
