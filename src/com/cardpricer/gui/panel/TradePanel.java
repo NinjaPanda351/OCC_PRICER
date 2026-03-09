@@ -187,8 +187,15 @@ public class TradePanel extends JPanel {
         JPanel topWrapper = new JPanel(new BorderLayout(0, 10));
         topWrapper.add(AppTheme.panelHeader("Trades", "Receive and price trade-ins"), BorderLayout.NORTH);
         topWrapper.add(createInputPanel(), BorderLayout.CENTER);
-        add(topWrapper, BorderLayout.NORTH);
-        add(createTablePanel(), BorderLayout.CENTER);
+
+        JPanel lowerPanel = new JPanel(new BorderLayout(10, 10));
+        lowerPanel.add(createTablePanel(), BorderLayout.CENTER);
+
+        JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, topWrapper, lowerPanel);
+        splitPane.setDividerLocation(360);
+        splitPane.setResizeWeight(0.0); // window resize goes to the table, not the input area
+        splitPane.setBorder(null);
+        add(splitPane, BorderLayout.CENTER);
         add(createBottomPanel(), BorderLayout.SOUTH);
 
         // Numpad + duplicates the most recently selected row from anywhere in the panel
@@ -365,6 +372,8 @@ public class TradePanel extends JPanel {
 
         cardCodeField = new JTextField();
         cardCodeField.setFont(cardCodeField.getFont().deriveFont(Font.PLAIN, 20f));
+        cardCodeField.setMinimumSize(new Dimension(100, 24));
+        cardCodeField.setPreferredSize(new Dimension(400, 24));
         cardCodeField.setToolTipText("Type set code + number, press Enter to add");
 
         cardCodeField.addKeyListener(new KeyAdapter() {

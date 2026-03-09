@@ -7,6 +7,7 @@ import com.cardpricer.service.ScryfallCatalogService;
 import com.cardpricer.util.AppTheme;
 import com.cardpricer.util.CardCodeParser;
 import com.cardpricer.util.CardConstants;
+import com.cardpricer.util.SetList;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -15,9 +16,12 @@ import javax.swing.event.DocumentListener;
 import java.awt.*;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Modal dialog for pasting a list of card codes and bulk-importing them into
@@ -48,7 +52,16 @@ public class PasteImportDialog extends JDialog {
         public boolean ok() { return card != null; }
     }
 
-    // ── Private helpers ──────────────────────────────────────────────────────
+    // ── Moxfield/ManaBox line pattern ─────────────────────────────────────────
+    // Format: <qty> <card name> (<set>) <coll> [*F*|*E*|*S*]
+    // e.g.:  1 Goblin Guide (PM19) 128s *F*
+    //        2 Inquisition of Kozilek (CN2) 140
+    //        1 Alpine Moon (PLST) M19-128
+    private static final Pattern MOXFIELD_LINE_PATTERN = Pattern.compile(
+            "^\\s*(\\d+)\\s+(.+?)\\s+\\((\\w+)\\)\\s+([^\\s*]+)(?:\\s+\\*([FES])\\*)?\\s*$",
+            Pattern.CASE_INSENSITIVE);
+
+    // ── Private helpers ───────────────────────────────────────────────────────
 
     private static final class ListItem {
         final String text;
@@ -72,7 +85,7 @@ public class PasteImportDialog extends JDialog {
         }
     }
 
-    // ── Fields ───────────────────────────────────────────────────────────────
+    // ── Fields ────────────────────────────────────────────────────────────────
 
     private final ScryfallApiService apiService;
     private final Consumer<List<FetchedResult>> onImportComplete;
@@ -81,7 +94,9 @@ public class PasteImportDialog extends JDialog {
     private final List<ParsedCode> validCodes = new ArrayList<>();
 
     // Phase 1 UI
+    private JTabbedPane inputTabPane;
     private JTextArea inputArea;
+    private JTextArea moxfieldArea;
     private JLabel previewSummaryLabel;
     private DefaultListModel<ListItem> previewModel;
     private JButton importButton;
@@ -96,7 +111,7 @@ public class PasteImportDialog extends JDialog {
     private CardLayout cardLayout;
     private JPanel cardPanel;
 
-    // ── Constructor ──────────────────────────────────────────────────────────
+    // ── Constructor ───────────────────────────────────────────────────────────
 
     /**
      * Creates the dialog.  Call {@link #setVisible(boolean) setVisible(true)} to show it.
@@ -113,11 +128,11 @@ public class PasteImportDialog extends JDialog {
         this.onImportComplete = onImportComplete;
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         buildUI();
-        setSize(480, 520);
+        setSize(520, 560);
         setLocationRelativeTo(owner);
     }
 
-    // ── UI construction ──────────────────────────────────────────────────────
+    // ── UI construction ───────────────────────────────────────────────────────
 
     private void buildUI() {
         JPanel content = new JPanel(new BorderLayout());
@@ -135,22 +150,42 @@ public class PasteImportDialog extends JDialog {
     private JPanel buildPhase1Panel() {
         JPanel panel = new JPanel(new BorderLayout(0, 10));
 
-        // ── Input area ───────────────────────────────────────────────────────
-        JPanel inputSection = new JPanel(new BorderLayout(0, 4));
-        JLabel instructionLabel = new JLabel(
-                "Paste one code per line (TDM 3, DMR 15f, PLST ARB 1, \u2026):");
-        instructionLabel.setFont(instructionLabel.getFont().deriveFont(Font.BOLD, 13f));
-        inputSection.add(instructionLabel, BorderLayout.NORTH);
+        // ── Input tabs ────────────────────────────────────────────────────────
+        inputTabPane = new JTabbedPane();
 
+        // Tab 1: Code List (existing format)
+        JPanel codeListTab = new JPanel(new BorderLayout(0, 4));
+        JLabel codeListLabel = new JLabel(
+                "Paste one code per line (TDM 3, DMR 15f, PLST ARB 1, \u2026):");
+        codeListLabel.setFont(codeListLabel.getFont().deriveFont(Font.BOLD, 13f));
+        codeListTab.add(codeListLabel, BorderLayout.NORTH);
         inputArea = new JTextArea(8, 36);
         inputArea.setFont(new Font("Monospaced", Font.PLAIN, 13));
         inputArea.setLineWrap(false);
         JScrollPane inputScroll = new JScrollPane(inputArea);
-        inputScroll.setPreferredSize(new Dimension(450, 160));
-        inputSection.add(inputScroll, BorderLayout.CENTER);
-        panel.add(inputSection, BorderLayout.NORTH);
+        inputScroll.setPreferredSize(new Dimension(470, 160));
+        codeListTab.add(inputScroll, BorderLayout.CENTER);
+        inputTabPane.addTab("Code List", codeListTab);
 
-        // ── Preview section ──────────────────────────────────────────────────
+        // Tab 2: Moxfield / ManaBox
+        JPanel moxfieldTab = new JPanel(new BorderLayout(0, 4));
+        JLabel moxfieldLabel = new JLabel(
+                "<html>Paste a Moxfield or ManaBox export &mdash; <b>1 Goblin Guide (PM19) 128s *F*</b></html>");
+        moxfieldLabel.setFont(moxfieldLabel.getFont().deriveFont(Font.BOLD, 13f));
+        moxfieldTab.add(moxfieldLabel, BorderLayout.NORTH);
+        moxfieldArea = new JTextArea(8, 36);
+        moxfieldArea.setFont(new Font("Monospaced", Font.PLAIN, 13));
+        moxfieldArea.setLineWrap(false);
+        JScrollPane moxfieldScroll = new JScrollPane(moxfieldArea);
+        moxfieldScroll.setPreferredSize(new Dimension(470, 160));
+        moxfieldTab.add(moxfieldScroll, BorderLayout.CENTER);
+        inputTabPane.addTab("Moxfield / ManaBox", moxfieldTab);
+
+        // Re-run preview when tab switches
+        inputTabPane.addChangeListener(e -> updatePreview());
+        panel.add(inputTabPane, BorderLayout.NORTH);
+
+        // ── Preview section ───────────────────────────────────────────────────
         JPanel previewSection = new JPanel(new BorderLayout(0, 4));
         previewSection.setBorder(AppTheme.sectionBorder("Preview"));
 
@@ -166,7 +201,7 @@ public class PasteImportDialog extends JDialog {
         previewSection.add(new JScrollPane(previewList), BorderLayout.CENTER);
         panel.add(previewSection, BorderLayout.CENTER);
 
-        // ── Buttons ──────────────────────────────────────────────────────────
+        // ── Buttons ───────────────────────────────────────────────────────────
         importButton = AppTheme.primaryButton("Import 0 Cards");
         importButton.setEnabled(false);
         importButton.addActionListener(e -> startFetching());
@@ -179,12 +214,14 @@ public class PasteImportDialog extends JDialog {
         buttonRow.add(cancelButton);
         panel.add(buttonRow, BorderLayout.SOUTH);
 
-        // ── DocumentListener for live preview ────────────────────────────────
-        inputArea.getDocument().addDocumentListener(new DocumentListener() {
+        // ── DocumentListeners for live preview ────────────────────────────────
+        DocumentListener dl = new DocumentListener() {
             @Override public void insertUpdate(DocumentEvent e)  { updatePreview(); }
             @Override public void removeUpdate(DocumentEvent e)  { updatePreview(); }
             @Override public void changedUpdate(DocumentEvent e) { updatePreview(); }
-        });
+        };
+        inputArea.getDocument().addDocumentListener(dl);
+        moxfieldArea.getDocument().addDocumentListener(dl);
 
         return panel;
     }
@@ -192,7 +229,7 @@ public class PasteImportDialog extends JDialog {
     private JPanel buildPhase2Panel() {
         JPanel panel = new JPanel(new BorderLayout(0, 10));
 
-        // ── Progress area ────────────────────────────────────────────────────
+        // ── Progress area ─────────────────────────────────────────────────────
         JPanel progressSection = new JPanel(new BorderLayout(0, 4));
         progressLabel = new JLabel("Preparing\u2026");
         progressLabel.setFont(progressLabel.getFont().deriveFont(Font.BOLD, 13f));
@@ -202,7 +239,7 @@ public class PasteImportDialog extends JDialog {
         progressSection.add(progressBar,   BorderLayout.CENTER);
         panel.add(progressSection, BorderLayout.NORTH);
 
-        // ── Results list ─────────────────────────────────────────────────────
+        // ── Results list ──────────────────────────────────────────────────────
         resultModel = new DefaultListModel<>();
         JList<ListItem> resultList = new JList<>(resultModel);
         resultList.setFont(new Font("Monospaced", Font.PLAIN, 12));
@@ -211,7 +248,7 @@ public class PasteImportDialog extends JDialog {
         resultScroll.setBorder(AppTheme.sectionBorder("Results"));
         panel.add(resultScroll, BorderLayout.CENTER);
 
-        // ── Close button ─────────────────────────────────────────────────────
+        // ── Close button ──────────────────────────────────────────────────────
         closeButton = AppTheme.primaryButton("Close");
         closeButton.setEnabled(false);
         closeButton.addActionListener(e -> dispose());
@@ -223,13 +260,15 @@ public class PasteImportDialog extends JDialog {
         return panel;
     }
 
-    // ── Preview logic ────────────────────────────────────────────────────────
+    // ── Preview logic ─────────────────────────────────────────────────────────
 
     private void updatePreview() {
         previewModel.clear();
         validCodes.clear();
 
-        String text = inputArea.getText();
+        boolean isMoxfield = inputTabPane.getSelectedIndex() == 1;
+        String text = isMoxfield ? moxfieldArea.getText() : inputArea.getText();
+
         if (text.isBlank()) {
             previewSummaryLabel.setText("Enter codes above to preview");
             importButton.setText("Import 0 Cards");
@@ -244,22 +283,48 @@ public class PasteImportDialog extends JDialog {
             String trimmed = line.trim();
             if (trimmed.isEmpty()) continue;
 
-            ParsedCode parsed = CardCodeParser.parse(trimmed);
-            if (parsed != null) {
-                String finishDisplay = switch (parsed.finish) {
-                    case "F" -> "foil";
-                    case "E" -> "etched";
-                    case "S" -> "surge foil";
-                    default  -> "normal";
-                };
-                previewModel.addElement(new ListItem(
-                        "\u2713 " + trimmed + "   \u2192  " + finishDisplay, true));
-                validCodes.add(parsed);
-                valid++;
+            if (isMoxfield) {
+                List<ParsedCode> codes = parseMoxfieldLine(trimmed);
+                if (!codes.isEmpty()) {
+                    ParsedCode first = codes.get(0);
+                    String finishDisplay = switch (first.finish) {
+                        case "F" -> "foil";
+                        case "E" -> "etched";
+                        case "S" -> "surge foil";
+                        default  -> "normal";
+                    };
+                    int qty = codes.size();
+                    String setDisplay = first.setCode.equalsIgnoreCase("plst")
+                            ? "PLST " + first.collectorNumber
+                            : first.setCode.toUpperCase() + " " + first.collectorNumber;
+                    String display = (qty > 1 ? qty + "\u00d7 " : "") + setDisplay
+                            + "  \u2192  " + finishDisplay;
+                    previewModel.addElement(new ListItem("\u2713 " + display, true));
+                    validCodes.addAll(codes);
+                    valid += qty;
+                } else {
+                    previewModel.addElement(new ListItem(
+                            "\u2717 \"" + trimmed + "\"   cannot parse", false));
+                    invalid++;
+                }
             } else {
-                previewModel.addElement(new ListItem(
-                        "\u2717 \"" + trimmed + "\"   cannot parse", false));
-                invalid++;
+                ParsedCode parsed = CardCodeParser.parse(trimmed);
+                if (parsed != null) {
+                    String finishDisplay = switch (parsed.finish) {
+                        case "F" -> "foil";
+                        case "E" -> "etched";
+                        case "S" -> "surge foil";
+                        default  -> "normal";
+                    };
+                    previewModel.addElement(new ListItem(
+                            "\u2713 " + trimmed + "   \u2192  " + finishDisplay, true));
+                    validCodes.add(parsed);
+                    valid++;
+                } else {
+                    previewModel.addElement(new ListItem(
+                            "\u2717 \"" + trimmed + "\"   cannot parse", false));
+                    invalid++;
+                }
             }
         }
 
@@ -272,7 +337,70 @@ public class PasteImportDialog extends JDialog {
         importButton.setEnabled(valid > 0);
     }
 
-    // ── Fetch logic ──────────────────────────────────────────────────────────
+    // ── Moxfield / ManaBox parsing ────────────────────────────────────────────
+
+    /**
+     * Parses a single Moxfield / ManaBox export line into one or more
+     * {@link ParsedCode} entries (quantity-expanded).
+     *
+     * <p>Conversion rules:
+     * <ul>
+     *   <li>PLST collector numbers (e.g. {@code M19-128}) are passed through as-is.</li>
+     *   <li>When a P-prefixed set code (e.g. {@code PM19}) is paired with a collector
+     *       number that ends in {@code s} or {@code p} (e.g. {@code 128s}), both the
+     *       P-prefix and the suffix are stripped ({@code M19 128}).  This handles the
+     *       common Moxfield promo encoding without touching standalone promo sets like
+     *       {@code PLG21} whose collector numbers carry no such suffix.</li>
+     *   <li>{@code *F*} → foil, {@code *E*} → etched, {@code *S*} → surge foil.</li>
+     * </ul>
+     *
+     * @param line one trimmed line from the Moxfield export
+     * @return list of {@link ParsedCode} (size == quantity); empty list if unparseable
+     */
+    static List<ParsedCode> parseMoxfieldLine(String line) {
+        Matcher m = MOXFIELD_LINE_PATTERN.matcher(line);
+        if (!m.matches()) return List.of();
+
+        int qty        = Integer.parseInt(m.group(1));
+        // group 2 = card name (not used for lookup)
+        String rawSet  = m.group(3).toUpperCase();
+        String rawColl = m.group(4);
+        String finishChar = m.group(5); // null if no *X* tag
+
+        String finish = finishChar == null ? "" : finishChar.toUpperCase();
+        String setCode;
+        String collNum;
+
+        if ("PLST".equals(rawSet)) {
+            // PLST: collector number is already "SET-NUM" (e.g. M19-128)
+            setCode = "plst";
+            collNum = rawColl.toLowerCase();
+        } else {
+            // Strip P-promo prefix only when collector number carries an s/p suffix.
+            // This preserves standalone promo sets (PLG21, PRCQ, PUMA, …) whose
+            // collector numbers don't use these Moxfield promo markers.
+            String rawCollLower = rawColl.toLowerCase();
+            boolean isPromoEncoding = rawSet.length() > 2
+                    && rawSet.startsWith("P")
+                    && (rawCollLower.endsWith("s") || rawCollLower.endsWith("p"));
+
+            if (isPromoEncoding) {
+                setCode = SetList.toScryfallCode(rawSet.substring(1)); // strip P
+                collNum = rawCollLower.substring(0, rawCollLower.length() - 1); // strip suffix
+            } else {
+                setCode = SetList.toScryfallCode(rawSet);
+                collNum = rawCollLower;
+            }
+        }
+
+        // Surge foil requires ★ suffix on the collector number for Scryfall
+        if ("S".equals(finish)) collNum += "\u2605";
+
+        ParsedCode parsed = new ParsedCode(setCode, collNum, finish);
+        return Collections.nCopies(qty, parsed);
+    }
+
+    // ── Fetch logic ───────────────────────────────────────────────────────────
 
     private void startFetching() {
         if (validCodes.isEmpty()) return;
@@ -379,7 +507,7 @@ public class PasteImportDialog extends JDialog {
         }.execute();
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static BigDecimal getDisplayPrice(FetchedResult r) {
         Card card = r.card();
