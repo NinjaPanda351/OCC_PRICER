@@ -1,19 +1,26 @@
 package com.cardpricer.util;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.prefs.Preferences;
 
 /**
- * Contains hardcoded list of Magic: The Gathering set codes
- * for bulk processing operations.
+ * Contains the list of Magic: The Gathering set codes for bulk processing.
+ *
+ * <p>The built-in codes are hardcoded below.  Users may add extra sets via
+ * Preferences → Custom Sets; those are persisted to {@link Preferences} and
+ * merged into {@link #ALL_SETS_CUSTOM_CODES} at startup.
  */
 public class SetList {
 
-    /**
-     * All set codes using OUR CUSTOM CODES (what we display and save as)
-     */
-    public static final List<String> ALL_SETS_CUSTOM_CODES = List.of(
+    // ── Built-in set codes (hardcoded, never modified at runtime) ─────────────
+
+    private static final List<String> BUILTIN_SETS = List.of(
             "3ED", "4ED", "5ED", "6ED", "7ED", "8ED", "9ED", "XED",
             "M10", "M11", "M12", "M13", "M14", "M15",
             "AFR", "AFC",
@@ -84,7 +91,7 @@ public class SetList {
             "LCI", "LCC",
             "THS", "THB",
             "ELD",
-            "TLA", "TLE", "TSP", "TSR", "TSTS", "TOR",
+            "TLA", "TLE", "TMT", "TMC", "PZA", "TSP", "TSR", "TSTS", "TOR",
             "UMA",
             "UNF",
             "ACR", "WHO", "PIP", "REX", "BOT", "40K",
@@ -94,101 +101,179 @@ public class SetList {
             "WWK", "ZEN", "ZNR", "ZNC", "ZNE"
     );
 
-    /**
-     * Map: OUR CUSTOM CODE -> SCRYFALL API CODE
-     * Use this when making API calls
-     */
-    private static final Map<String, String> CUSTOM_TO_API = new HashMap<>();
+    // ── Dynamic combined list (builtins + user-added) ─────────────────────────
 
     /**
-     * Map: SCRYFALL API CODE -> OUR CUSTOM CODE
-     * Use this when parsing API responses
+     * All set codes — built-in plus any user-added sets.
+     * Rebuilt whenever custom sets are saved via the UI.
      */
+    public static final List<String> ALL_SETS_CUSTOM_CODES = new ArrayList<>(BUILTIN_SETS);
+
+    // ── Built-in code mappings (custom code ↔ Scryfall code) ─────────────────
+
+    private static final Map<String, String> CUSTOM_TO_API = new HashMap<>();
     private static final Map<String, String> API_TO_CUSTOM = new HashMap<>();
 
+    // ── User-added code mappings (separate map, rebuilt on save) ─────────────
+
+    private static final Map<String, String> USER_CUSTOM_TO_API = new HashMap<>();
+    private static final Map<String, String> USER_API_TO_CUSTOM = new HashMap<>();
+
+    // ── Persistence ───────────────────────────────────────────────────────────
+
+    /** Own prefs node — independent of the GUI prefs node. */
+    static final Preferences PREFS         = Preferences.userNodeForPackage(SetList.class);
+    private static final String CUSTOM_KEY = "user.custom.sets";
+
+    // ── Static initialisation ─────────────────────────────────────────────────
+
     static {
-        // Initialize the bidirectional mapping
-        addMapping("XED", "10e");
-        addMapping("COK", "chk");
-        addMapping("AVNB", "ddh");
-        addMapping("EVT", "ddf");
-        addMapping("HVM", "ddl");
-        addMapping("IVG", "ddj");
-        addMapping("JVC", "dd2");
-        addMapping("JVV", "ddm");
-        addMapping("KVD", "ddg");
-        addMapping("PVC", "dde");
-        addMapping("SVT", "ddk");
-        addMapping("VVK", "ddi");
-        addMapping("DPW", "dpa");
-        addMapping("V08", "drb");
-        addMapping("V20", "v13");
-        addMapping("M25", "a25");
-        addMapping("MHR", "h1r");
-        addMapping("PC", "hop");
-        addMapping("PFI", "pd2");
-        addMapping("PGB", "pd3");
-        addMapping("SLI", "h09");
-        addMapping("TSTS", "tsb");
+        addBuiltinMapping("XED",  "10e");
+        addBuiltinMapping("COK",  "chk");
+        addBuiltinMapping("AVNB", "ddh");
+        addBuiltinMapping("EVT",  "ddf");
+        addBuiltinMapping("HVM",  "ddl");
+        addBuiltinMapping("IVG",  "ddj");
+        addBuiltinMapping("JVC",  "dd2");
+        addBuiltinMapping("JVV",  "ddm");
+        addBuiltinMapping("KVD",  "ddg");
+        addBuiltinMapping("PVC",  "dde");
+        addBuiltinMapping("SVT",  "ddk");
+        addBuiltinMapping("VVK",  "ddi");
+        addBuiltinMapping("DPW",  "dpa");
+        addBuiltinMapping("V08",  "drb");
+        addBuiltinMapping("V20",  "v13");
+        addBuiltinMapping("M25",  "a25");
+        addBuiltinMapping("MHR",  "h1r");
+        addBuiltinMapping("PC",   "hop");
+        addBuiltinMapping("PFI",  "pd2");
+        addBuiltinMapping("PGB",  "pd3");
+        addBuiltinMapping("SLI",  "h09");
+        addBuiltinMapping("TSTS", "tsb");
+
+        loadCustomSets();
     }
 
-    /**
-     * Helper to add bidirectional mapping
-     */
-    private static void addMapping(String customCode, String apiCode) {
-        CUSTOM_TO_API.put(customCode.toUpperCase(), apiCode.toLowerCase());
-        API_TO_CUSTOM.put(apiCode.toLowerCase(), customCode.toUpperCase());
-    }
+    // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Converts OUR custom code to Scryfall API code for making API calls
-     * Example: "COK" -> "chk"
-     *
-     * @param customCode Our internal set code
-     * @return Scryfall API code (lowercase)
+     * Converts a custom display code to the Scryfall API code.
+     * Falls back to lowercase of the custom code if no mapping exists.
      */
     public static String toScryfallCode(String customCode) {
-        if (customCode == null) {
-            return null;
-        }
-        String upperCode = customCode.toUpperCase();
-        return CUSTOM_TO_API.getOrDefault(upperCode, upperCode.toLowerCase());
+        if (customCode == null) return null;
+        String upper = customCode.toUpperCase();
+        String builtin = CUSTOM_TO_API.get(upper);
+        if (builtin != null) return builtin;
+        String user = USER_CUSTOM_TO_API.get(upper);
+        return user != null ? user : upper.toLowerCase();
     }
 
     /**
-     * Converts Scryfall API code to OUR custom code for display/storage
-     * Example: "chk" -> "COK"
-     *
-     * @param scryfallCode The code from Scryfall API response
-     * @return Our custom code (uppercase)
+     * Converts a Scryfall API code to the custom display code.
+     * Falls back to uppercase of the Scryfall code if no mapping exists.
      */
     public static String fromScryfallCode(String scryfallCode) {
-        if (scryfallCode == null) {
-            return null;
-        }
-        String lowerCode = scryfallCode.toLowerCase();
-        return API_TO_CUSTOM.getOrDefault(lowerCode, scryfallCode.toUpperCase());
+        if (scryfallCode == null) return null;
+        String lower = scryfallCode.toLowerCase();
+        String builtin = API_TO_CUSTOM.get(lower);
+        if (builtin != null) return builtin;
+        String user = USER_API_TO_CUSTOM.get(lower);
+        return user != null ? user : scryfallCode.toUpperCase();
     }
 
     /**
-     * @deprecated Use toScryfallCode() instead
+     * Returns the user-added sets as a list of {@code [customCode, scryfallCode]} pairs.
+     * {@code scryfallCode} is empty string when no custom mapping is needed.
+     * Used by the Custom Sets UI to populate its table.
      */
+    public static List<String[]> getCustomSetEntries() {
+        List<String[]> entries = new ArrayList<>();
+        String json = PREFS.get(CUSTOM_KEY, "[]");
+        try {
+            JSONArray arr = new JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject obj = arr.getJSONObject(i);
+                String c = obj.getString("c").toUpperCase();
+                String s = obj.optString("s", "");
+                entries.add(new String[]{c, s});
+            }
+        } catch (Exception ignored) {}
+        return entries;
+    }
+
+    /**
+     * Persists the given custom set entries and immediately updates the in-memory
+     * lists and maps.  Call this from the UI after the user clicks Save.
+     *
+     * @param entries list of {@code [customCode, scryfallCode]} pairs;
+     *                {@code scryfallCode} may be null or empty when not needed
+     */
+    public static void saveCustomSets(List<String[]> entries) {
+        JSONArray arr = new JSONArray();
+        for (String[] e : entries) {
+            JSONObject obj = new JSONObject();
+            obj.put("c", e[0].toUpperCase().trim());
+            if (e.length > 1 && e[1] != null && !e[1].isBlank()) {
+                obj.put("s", e[1].toLowerCase().trim());
+            }
+            arr.put(obj);
+        }
+        PREFS.put(CUSTOM_KEY, arr.toString());
+        applyCustomSets(entries);
+    }
+
+    /** Returns the total number of set codes (built-in + custom). */
+    public static int getSetCount() {
+        return ALL_SETS_CUSTOM_CODES.size();
+    }
+
+    /** Returns {@code true} if the code is in the combined set list. */
+    public static boolean isValidSetCode(String setCode) {
+        return ALL_SETS_CUSTOM_CODES.contains(setCode.toUpperCase());
+    }
+
+    /** Returns {@code true} if the code is a built-in (non-user-added) set. */
+    public static boolean isBuiltinSet(String setCode) {
+        return BUILTIN_SETS.contains(setCode.toUpperCase());
+    }
+
+    /** @deprecated Use {@link #toScryfallCode(String)} instead */
     @Deprecated
     public static String getApiCode(String setCode) {
         return toScryfallCode(setCode);
     }
 
-    /**
-     * Returns the total number of unique set codes
-     */
-    public static int getSetCount() {
-        return ALL_SETS_CUSTOM_CODES.size();
+    // ── Private ───────────────────────────────────────────────────────────────
+
+    private static void addBuiltinMapping(String customCode, String apiCode) {
+        CUSTOM_TO_API.put(customCode.toUpperCase(), apiCode.toLowerCase());
+        API_TO_CUSTOM.put(apiCode.toLowerCase(), customCode.toUpperCase());
     }
 
-    /**
-     * Checks if a set code exists in our custom code list
-     */
-    public static boolean isValidSetCode(String setCode) {
-        return ALL_SETS_CUSTOM_CODES.contains(setCode.toUpperCase());
+    private static void loadCustomSets() {
+        applyCustomSets(getCustomSetEntries());
+    }
+
+    /** Rebuilds {@link #ALL_SETS_CUSTOM_CODES} and user mapping maps from {@code entries}. */
+    private static void applyCustomSets(List<String[]> entries) {
+        USER_CUSTOM_TO_API.clear();
+        USER_API_TO_CUSTOM.clear();
+
+        ALL_SETS_CUSTOM_CODES.clear();
+        ALL_SETS_CUSTOM_CODES.addAll(BUILTIN_SETS);
+
+        for (String[] e : entries) {
+            String customCode = e[0].toUpperCase().trim();
+            if (customCode.isEmpty()) continue;
+            if (!ALL_SETS_CUSTOM_CODES.contains(customCode)) {
+                ALL_SETS_CUSTOM_CODES.add(customCode);
+            }
+            if (e.length > 1 && e[1] != null && !e[1].isBlank()) {
+                String scryfallCode = e[1].toLowerCase().trim();
+                USER_CUSTOM_TO_API.put(customCode, scryfallCode);
+                USER_API_TO_CUSTOM.put(scryfallCode, customCode);
+            }
+        }
     }
 }

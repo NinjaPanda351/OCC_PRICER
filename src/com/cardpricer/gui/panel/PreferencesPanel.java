@@ -4,6 +4,7 @@ import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.gui.panel.prefs.AppearanceTab;
 import com.cardpricer.gui.panel.prefs.BuyRatesTab;
 import com.cardpricer.gui.panel.prefs.CatalogTab;
+import com.cardpricer.gui.panel.prefs.CustomSetsTab;
 import com.cardpricer.gui.panel.prefs.NetworkTab;
 import com.cardpricer.util.AppTheme;
 
@@ -42,6 +43,9 @@ public class PreferencesPanel extends JPanel {
         {"--- Card Catalog", ""},
         {"Download Catalog", "Download the full Scryfall card list for instant paste-import (~30 MB download)"},
         {"Load into Memory", "Load an existing catalog file into memory for this session"},
+        {"--- Custom Sets", ""},
+        {"Custom Code",      "Your display/storage code for the new set (e.g. TMT)"},
+        {"Scryfall Code",    "Only fill in if Scryfall uses a different code (leave blank if same)"},
     };
 
     public PreferencesPanel() {
@@ -92,6 +96,7 @@ public class PreferencesPanel extends JPanel {
         tabs.addTab("Network",      new NetworkTab().build());
         tabs.addTab("Buy Rates",    new BuyRatesTab().build());
         tabs.addTab("Card Catalog", new CatalogTab().build());
+        tabs.addTab("Custom Sets",  new CustomSetsTab().build());
         return tabs;
     }
 }
