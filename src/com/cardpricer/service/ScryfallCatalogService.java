@@ -131,10 +131,67 @@ public class ScryfallCatalogService {
         return resolved.toUpperCase() + ":" + cleanColl;
     }
 
-    // ── Cache file path ───────────────────────────────────────────────────────
+    // ── Cache file paths ──────────────────────────────────────────────────────
 
     private static File getCacheFile() {
         return new File(AppDataDirectory.cache(), CACHE_FILENAME);
+    }
+
+    /**
+     * Returns the catalog file path inside the shared folder's {@code cache/} subdir,
+     * or {@code null} when no shared folder is configured or accessible.
+     */
+    private static File getSharedCacheFile() {
+        String shared = com.cardpricer.util.SharedFolderLocator.getSharedFolder();
+        if (shared.isBlank()) return null;
+        File root = new File(shared);
+        if (!root.isDirectory()) return null;
+        File cacheDir = new File(root, "cache");
+        cacheDir.mkdirs();
+        return new File(cacheDir, CACHE_FILENAME);
+    }
+
+    /** Returns {@code true} if a catalog file exists in the configured shared folder. */
+    public boolean isSharedCatalogAvailable() {
+        File f = getSharedCacheFile();
+        return f != null && f.exists();
+    }
+
+    /**
+     * Copies the local catalog to the shared folder's {@code cache/} subdir so other
+     * workstations can import it without re-downloading from Scryfall.
+     *
+     * @return {@code true} on success
+     * @throws IOException if the copy fails or no local catalog exists
+     */
+    public boolean copyCatalogToSharedFolder() throws IOException {
+        if (!isCatalogAvailable()) {
+            throw new IOException("No local catalog to copy — download it first.");
+        }
+        File dest = getSharedCacheFile();
+        if (dest == null) {
+            throw new IOException("No shared folder configured.");
+        }
+        java.nio.file.Files.copy(getCacheFile().toPath(), dest.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        return true;
+    }
+
+    /**
+     * Copies the catalog from the shared folder to the local cache directory,
+     * then loads it into memory.
+     *
+     * @return the number of cards loaded
+     * @throws IOException if no shared catalog exists or the copy/load fails
+     */
+    public int importCatalogFromSharedFolder() throws Exception {
+        File src = getSharedCacheFile();
+        if (src == null || !src.exists()) {
+            throw new IOException("No catalog found in shared folder.");
+        }
+        java.nio.file.Files.copy(src.toPath(), getCacheFile().toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        return loadFromDisk();
     }
 
     // ── Load from local cache ─────────────────────────────────────────────────

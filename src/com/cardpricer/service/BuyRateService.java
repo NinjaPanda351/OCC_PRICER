@@ -3,6 +3,8 @@ package com.cardpricer.service;
 import com.cardpricer.gui.panel.PreferencesPanel;
 import com.cardpricer.model.BountyCard;
 import com.cardpricer.model.BuyRateRule;
+import com.cardpricer.util.AppDataDirectory;
+import com.cardpricer.util.SharedFolderLocator;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -12,6 +14,7 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -39,15 +42,23 @@ import java.util.prefs.Preferences;
  */
 public class BuyRateService {
 
-    private static final String RULES_KEY    = "buy.rate.rules";
-    private static final String BOUNTIES_KEY = "buy.rate.bounties";
+    // ── JSON file names (written to SharedFolderLocator.configDir()) ─────────
+
+    private static final String RULES_FILE    = "buy_rates.json";
+    private static final String BOUNTIES_FILE = "bounties.json";
+
+    // ── Legacy Preferences keys (one-time migration only) ─────────────────────
+
+    private static final String LEGACY_RULES_KEY    = "buy.rate.rules";
+    private static final String LEGACY_BOUNTIES_KEY = "buy.rate.bounties";
+    private static final Preferences LEGACY_PREFS   =
+            Preferences.userNodeForPackage(PreferencesPanel.class);
+
+    // ── Rate defaults ─────────────────────────────────────────────────────────
 
     private static final BigDecimal DEFAULT_CREDIT    = new BigDecimal("0.50");
     private static final BigDecimal DEFAULT_CHECK     = new BigDecimal("0.33");
     private static final BigDecimal DEFAULT_THRESHOLD = BigDecimal.ZERO;
-
-    private static final Preferences PREFS =
-            Preferences.userNodeForPackage(PreferencesPanel.class);
 
     /** Monotonically increasing counter; incremented each time rules or bounties are saved. */
     private static volatile int saveGeneration = 0;
@@ -129,12 +140,12 @@ public class BuyRateService {
     }
 
     /**
-     * Re-reads rules and bounties from persistent preferences.
+     * Re-reads rules and bounties from their JSON config files.
      * Call this when {@link #getSaveGeneration()} returns a new value.
      */
     public void reload() {
-        rules    = loadRulesFromPrefs();
-        bounties = loadBountiesFromPrefs();
+        rules    = loadRules();
+        bounties = loadBounties();
     }
 
     /**
@@ -160,7 +171,7 @@ public class BuyRateService {
     }
 
     /**
-     * Validates and saves the given rules list to preferences.
+     * Validates and saves the given rules list to the JSON config file.
      *
      * <p>Validation: at least one rule with {@code thresholdMin == 0.00} must
      * exist to serve as the catch-all.
@@ -184,15 +195,14 @@ public class BuyRateService {
             obj.put("checkRate",    rule.checkRate.toPlainString());
             arr.put(obj);
         }
-        PREFS.put(RULES_KEY, arr.toString());
+        writeConfigJson(RULES_FILE, arr.toString());
 
-        // Reload cache and bump generation
         rules = buildDescendingList(newRules);
         saveGeneration++;
     }
 
     /**
-     * Saves bounty cards to preferences and increments the save generation.
+     * Saves bounty cards to the JSON config file and increments the save generation.
      *
      * @param newBounties bounties to persist
      */
@@ -205,7 +215,7 @@ public class BuyRateService {
             obj.put("checkRate",  b.checkRate.toPlainString());
             arr.put(obj);
         }
-        PREFS.put(BOUNTIES_KEY, arr.toString());
+        writeConfigJson(BOUNTIES_FILE, arr.toString());
 
         bounties = buildBountyMap(newBounties);
         saveGeneration++;
@@ -273,8 +283,8 @@ public class BuyRateService {
     // Private helpers
     // -------------------------------------------------------------------------
 
-    private List<BuyRateRule> loadRulesFromPrefs() {
-        String json = PREFS.get(RULES_KEY, "");
+    private List<BuyRateRule> loadRules() {
+        String json = readConfigJson(RULES_FILE, LEGACY_RULES_KEY);
         List<BuyRateRule> list = new ArrayList<>();
 
         if (!json.isBlank()) {
@@ -289,7 +299,7 @@ public class BuyRateService {
                 }
             } catch (Exception e) {
                 System.err.println("[BuyRateService] Failed to parse rules: " + e.getMessage());
-                list.clear(); // fall through to defaults below
+                list.clear();
             }
         }
 
@@ -303,8 +313,8 @@ public class BuyRateService {
         return buildDescendingList(list);
     }
 
-    private Map<String, BountyCard> loadBountiesFromPrefs() {
-        String json = PREFS.get(BOUNTIES_KEY, "");
+    private Map<String, BountyCard> loadBounties() {
+        String json = readConfigJson(BOUNTIES_FILE, LEGACY_BOUNTIES_KEY);
         List<BountyCard> list = new ArrayList<>();
 
         if (!json.isBlank()) {
@@ -312,9 +322,9 @@ public class BuyRateService {
                 JSONArray arr = new JSONArray(json);
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject obj = arr.getJSONObject(i);
-                    String cardName    = obj.getString("cardName");
-                    BigDecimal credit  = new BigDecimal(obj.getString("creditRate"));
-                    BigDecimal check   = new BigDecimal(obj.getString("checkRate"));
+                    String cardName   = obj.getString("cardName");
+                    BigDecimal credit = new BigDecimal(obj.getString("creditRate"));
+                    BigDecimal check  = new BigDecimal(obj.getString("checkRate"));
                     list.add(new BountyCard(cardName, credit, check));
                 }
             } catch (Exception e) {
@@ -323,6 +333,50 @@ public class BuyRateService {
         }
 
         return buildBountyMap(list);
+    }
+
+    /**
+     * Reads JSON from a config file, with fallback chain:
+     * 1. shared (or local) configDir / filename
+     * 2. local AppData config / filename  (when shared dir differs)
+     * 3. legacy Preferences key           (one-time migration)
+     */
+    private static String readConfigJson(String filename, String legacyKey) {
+        File primary = new File(SharedFolderLocator.configDir(), filename);
+        if (primary.exists()) {
+            try { return Files.readString(primary.toPath()); }
+            catch (IOException e) {
+                System.err.println("[BuyRateService] Cannot read " + primary + ": " + e.getMessage());
+            }
+        }
+
+        // Fallback: local AppData config (user just configured shared folder)
+        File local = new File(AppDataDirectory.config(), filename);
+        if (local.exists() && !local.getAbsolutePath().equals(primary.getAbsolutePath())) {
+            try { return Files.readString(local.toPath()); }
+            catch (IOException e) {
+                System.err.println("[BuyRateService] Cannot read " + local + ": " + e.getMessage());
+            }
+        }
+
+        // Last resort: migrate from legacy Preferences (Windows Registry)
+        String fromPrefs = LEGACY_PREFS.get(legacyKey, "");
+        if (!fromPrefs.isBlank()) {
+            System.out.println("[BuyRateService] Migrating '" + legacyKey + "' from Preferences → " + primary);
+            writeConfigJson(filename, fromPrefs);
+            LEGACY_PREFS.remove(legacyKey);
+        }
+        return fromPrefs;
+    }
+
+    private static void writeConfigJson(String filename, String json) {
+        File f = new File(SharedFolderLocator.configDir(), filename);
+        try {
+            f.getParentFile().mkdirs();
+            Files.writeString(f.toPath(), json);
+        } catch (IOException e) {
+            System.err.println("[BuyRateService] Cannot write " + f + ": " + e.getMessage());
+        }
     }
 
     private static List<BuyRateRule> buildDescendingList(List<BuyRateRule> src) {

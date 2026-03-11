@@ -18,6 +18,8 @@ public final class CatalogTab {
     private JLabel       catalogProgressLabel;
     private JButton      downloadCatalogBtn;
     private JButton      loadCatalogBtn;
+    private JButton      copyToSharedBtn;
+    private JButton      loadFromSharedBtn;
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -78,8 +80,20 @@ public final class CatalogTab {
         loadCatalogBtn.setFocusPainted(false);
         loadCatalogBtn.addActionListener(e -> startCatalogLoad());
 
+        copyToSharedBtn = new JButton("Copy to Shared Folder");
+        copyToSharedBtn.setFocusPainted(false);
+        copyToSharedBtn.setToolTipText("Copy local catalog to the shared folder so other workstations can import it");
+        copyToSharedBtn.addActionListener(e -> copyToSharedFolder());
+
+        loadFromSharedBtn = new JButton("Load from Shared Folder");
+        loadFromSharedBtn.setFocusPainted(false);
+        loadFromSharedBtn.setToolTipText("Copy catalog from shared folder to local cache, then load into memory");
+        loadFromSharedBtn.addActionListener(e -> loadFromSharedFolder());
+
         btnRow.add(downloadCatalogBtn);
         btnRow.add(loadCatalogBtn);
+        btnRow.add(copyToSharedBtn);
+        btnRow.add(loadFromSharedBtn);
         panel.add(btnRow);
         panel.add(Box.createVerticalStrut(10));
 
@@ -138,11 +152,14 @@ public final class CatalogTab {
         }
 
         loadCatalogBtn.setVisible(catalog.isCatalogAvailable() && !catalog.isLoaded());
+
+        boolean hasShared = !NetworkTab.getSharedTradesFolder().isEmpty();
+        copyToSharedBtn.setVisible(hasShared && catalog.isCatalogAvailable());
+        loadFromSharedBtn.setVisible(hasShared && catalog.isSharedCatalogAvailable());
     }
 
     private void startCatalogDownload() {
-        downloadCatalogBtn.setEnabled(false);
-        loadCatalogBtn.setEnabled(false);
+        setAllButtonsEnabled(false);
         catalogProgressBar.setIndeterminate(false);
         catalogProgressBar.setValue(0);
         catalogProgressBar.setVisible(true);
@@ -196,16 +213,86 @@ public final class CatalogTab {
                     catalogProgressLabel.setText("Error: " + msg);
                     catalogProgressLabel.setForeground(AppTheme.DANGER);
                 }
-                downloadCatalogBtn.setEnabled(true);
-                loadCatalogBtn.setEnabled(true);
+                setAllButtonsEnabled(true);
                 refreshCatalogStatus();
             }
         }.execute();
     }
 
+    private void copyToSharedFolder() {
+        setAllButtonsEnabled(false);
+        catalogProgressBar.setIndeterminate(true);
+        catalogProgressBar.setVisible(true);
+        catalogProgressLabel.setVisible(true);
+        catalogProgressLabel.setForeground(UIManager.getColor("Label.foreground"));
+        catalogProgressLabel.setText("Copying catalog to shared folder\u2026");
+
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws Exception {
+                ScryfallCatalogService.getInstance().copyCatalogToSharedFolder();
+                return null;
+            }
+            @Override
+            protected void done() {
+                catalogProgressBar.setIndeterminate(false);
+                catalogProgressBar.setValue(100);
+                try {
+                    get();
+                    catalogProgressLabel.setText("Catalog copied to shared folder.");
+                    catalogProgressLabel.setForeground(AppTheme.SUCCESS);
+                } catch (Exception ex) {
+                    String msg = ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage();
+                    catalogProgressLabel.setText("Copy failed: " + msg);
+                    catalogProgressLabel.setForeground(AppTheme.DANGER);
+                }
+                setAllButtonsEnabled(true);
+                refreshCatalogStatus();
+            }
+        }.execute();
+    }
+
+    private void loadFromSharedFolder() {
+        setAllButtonsEnabled(false);
+        catalogProgressBar.setIndeterminate(true);
+        catalogProgressBar.setVisible(true);
+        catalogProgressLabel.setVisible(true);
+        catalogProgressLabel.setForeground(UIManager.getColor("Label.foreground"));
+        catalogProgressLabel.setText("Importing catalog from shared folder\u2026");
+
+        new SwingWorker<Integer, Void>() {
+            @Override
+            protected Integer doInBackground() throws Exception {
+                return ScryfallCatalogService.getInstance().importCatalogFromSharedFolder();
+            }
+            @Override
+            protected void done() {
+                catalogProgressBar.setIndeterminate(false);
+                catalogProgressBar.setValue(100);
+                try {
+                    int count = get();
+                    catalogProgressLabel.setText("Loaded " + String.format("%,d", count) + " cards from shared folder.");
+                    catalogProgressLabel.setForeground(AppTheme.SUCCESS);
+                } catch (Exception ex) {
+                    String msg = ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage();
+                    catalogProgressLabel.setText("Import failed: " + msg);
+                    catalogProgressLabel.setForeground(AppTheme.DANGER);
+                }
+                setAllButtonsEnabled(true);
+                refreshCatalogStatus();
+            }
+        }.execute();
+    }
+
+    private void setAllButtonsEnabled(boolean enabled) {
+        downloadCatalogBtn.setEnabled(enabled);
+        loadCatalogBtn.setEnabled(enabled);
+        copyToSharedBtn.setEnabled(enabled);
+        loadFromSharedBtn.setEnabled(enabled);
+    }
+
     private void startCatalogLoad() {
-        downloadCatalogBtn.setEnabled(false);
-        loadCatalogBtn.setEnabled(false);
+        setAllButtonsEnabled(false);
         catalogProgressBar.setIndeterminate(true);
         catalogProgressBar.setVisible(true);
         catalogProgressLabel.setVisible(true);
@@ -230,8 +317,7 @@ public final class CatalogTab {
                     catalogProgressLabel.setText("Load failed: " + msg);
                     catalogProgressLabel.setForeground(AppTheme.DANGER);
                 }
-                downloadCatalogBtn.setEnabled(true);
-                loadCatalogBtn.setEnabled(true);
+                setAllButtonsEnabled(true);
                 refreshCatalogStatus();
             }
         }.execute();

@@ -3,6 +3,9 @@ package com.cardpricer.util;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -121,9 +124,11 @@ public class SetList {
 
     // ── Persistence ───────────────────────────────────────────────────────────
 
-    /** Own prefs node — independent of the GUI prefs node. */
-    static final Preferences PREFS         = Preferences.userNodeForPackage(SetList.class);
-    private static final String CUSTOM_KEY = "user.custom.sets";
+    private static final String CUSTOM_SETS_FILE = "custom_sets.json";
+
+    /** Legacy Preferences node — used only for one-time migration. */
+    private static final Preferences LEGACY_PREFS = Preferences.userNodeForPackage(SetList.class);
+    private static final String LEGACY_KEY        = "user.custom.sets";
 
     // ── Static initialisation ─────────────────────────────────────────────────
 
@@ -189,7 +194,7 @@ public class SetList {
      */
     public static List<String[]> getCustomSetEntries() {
         List<String[]> entries = new ArrayList<>();
-        String json = PREFS.get(CUSTOM_KEY, "[]");
+        String json = readCustomSetsJson();
         try {
             JSONArray arr = new JSONArray(json);
             for (int i = 0; i < arr.length(); i++) {
@@ -219,7 +224,7 @@ public class SetList {
             }
             arr.put(obj);
         }
-        PREFS.put(CUSTOM_KEY, arr.toString());
+        writeCustomSetsJson(arr.toString());
         applyCustomSets(entries);
     }
 
@@ -245,6 +250,50 @@ public class SetList {
     }
 
     // ── Private ───────────────────────────────────────────────────────────────
+
+    /**
+     * Reads custom sets JSON, with fallback chain:
+     * 1. configDir() / custom_sets.json  (shared or local)
+     * 2. local AppData config            (when shared dir differs)
+     * 3. legacy Preferences key          (one-time migration)
+     */
+    private static String readCustomSetsJson() {
+        File primary = new File(SharedFolderLocator.configDir(), CUSTOM_SETS_FILE);
+        if (primary.exists()) {
+            try { return Files.readString(primary.toPath()); }
+            catch (IOException e) {
+                System.err.println("[SetList] Cannot read " + primary + ": " + e.getMessage());
+            }
+        }
+
+        // Fallback: local AppData config
+        File local = new File(AppDataDirectory.config(), CUSTOM_SETS_FILE);
+        if (local.exists() && !local.getAbsolutePath().equals(primary.getAbsolutePath())) {
+            try { return Files.readString(local.toPath()); }
+            catch (IOException e) {
+                System.err.println("[SetList] Cannot read " + local + ": " + e.getMessage());
+            }
+        }
+
+        // Last resort: legacy Preferences migration
+        String fromPrefs = LEGACY_PREFS.get(LEGACY_KEY, "[]");
+        if (!"[]".equals(fromPrefs) && !fromPrefs.isBlank()) {
+            System.out.println("[SetList] Migrating custom sets from Preferences → " + primary);
+            writeCustomSetsJson(fromPrefs);
+            LEGACY_PREFS.remove(LEGACY_KEY);
+        }
+        return fromPrefs;
+    }
+
+    private static void writeCustomSetsJson(String json) {
+        File f = new File(SharedFolderLocator.configDir(), CUSTOM_SETS_FILE);
+        try {
+            f.getParentFile().mkdirs();
+            Files.writeString(f.toPath(), json);
+        } catch (IOException e) {
+            System.err.println("[SetList] Cannot write " + f + ": " + e.getMessage());
+        }
+    }
 
     private static void addBuiltinMapping(String customCode, String apiCode) {
         CUSTOM_TO_API.put(customCode.toUpperCase(), apiCode.toLowerCase());
