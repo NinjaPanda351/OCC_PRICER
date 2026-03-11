@@ -73,6 +73,10 @@ public class MainSwingApplication {
 
     private void start() {
         frame = new JFrame("OCC Card Pricer & Trading Platform");
+        try {
+            java.io.InputStream is = getClass().getResourceAsStream("/assets/OCC_Icon_400x400.jpg");
+            if (is != null) frame.setIconImage(javax.imageio.ImageIO.read(is));
+        } catch (Exception ignored) {}
         frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         frame.addWindowListener(new WindowAdapter() {
             @Override
@@ -127,7 +131,7 @@ public class MainSwingApplication {
         // Default screen
         showScreen(SCREEN_HOME, "Ready");
 
-        frame.setLocationRelativeTo(null);
+        frame.setExtendedState(JFrame.MAXIMIZED_BOTH);
         frame.setVisible(true);
 
         // Kick off background update check (daemon thread — never blocks UI)

@@ -50,6 +50,16 @@ Get-ChildItem -Path $SrcDir -Recurse -File | Where-Object { $_.Extension -ne ".j
     Copy-Item $_.FullName $dest -Force
 }
 
+# Also copy assets/ into the output dir so they are bundled in the JAR
+$AssetsDir = Join-Path $ProjectDir "assets"
+if (Test-Path $AssetsDir) {
+    $AssetsOutDir = Join-Path $OutDir "assets"
+    if (-not (Test-Path $AssetsOutDir)) { New-Item -ItemType Directory -Path $AssetsOutDir | Out-Null }
+    Get-ChildItem -Path $AssetsDir -File | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $AssetsOutDir $_.Name) -Force
+    }
+}
+
 # ── Step 3: Package as fat JAR ────────────────────────────────────────────────
 Write-Host "`n[3/4] Creating fat JAR..." -ForegroundColor Yellow
 
@@ -76,12 +86,33 @@ Pop-Location
 if ($LASTEXITCODE -ne 0) { throw "jar command failed" }
 Write-Host "  Created: $JarPath" -ForegroundColor Green
 
+# ── Step 3b: Convert icon JPG → ICO for jpackage ─────────────────────────────
+$IcoPath = Join-Path $AssetsDir "OCC_Icon.ico"
+$JpgPath = Join-Path $AssetsDir "OCC_Icon_400x400.jpg"
+if (Test-Path $JpgPath) {
+    Add-Type -AssemblyName System.Drawing
+    $bitmap = New-Object System.Drawing.Bitmap($JpgPath)
+    $hIcon  = $bitmap.GetHicon()
+    $icon   = [System.Drawing.Icon]::FromHandle($hIcon)
+    $stream = [System.IO.File]::Open($IcoPath, [System.IO.FileMode]::Create)
+    $icon.Save($stream)
+    $stream.Close()
+    $icon.Dispose()
+    $bitmap.Dispose()
+    Write-Host "  Icon converted: $IcoPath" -ForegroundColor Green
+} else {
+    Write-Host "  Warning: icon not found at $JpgPath — skipping icon" -ForegroundColor Yellow
+    $IcoPath = $null
+}
+
 # ── Step 4: jpackage (Windows app-image) ──────────────────────────────────────
 Write-Host "`n[4/4] Running jpackage..." -ForegroundColor Yellow
 
 $AppImageDir = Join-Path $DistDir $AppName
 if (Test-Path $AppImageDir) { Remove-Item $AppImageDir -Recurse -Force }
 if (-not (Test-Path $DistDir)) { New-Item -ItemType Directory -Path $DistDir | Out-Null }
+
+$iconArgs = if ($IcoPath -and (Test-Path $IcoPath)) { @("--icon", $IcoPath) } else { @() }
 
 jpackage `
     --type app-image `
@@ -91,7 +122,8 @@ jpackage `
     --main-jar $JarName `
     --main-class $MainClass `
     --dest $DistDir `
-    --java-options "-Xmx512m"
+    --java-options "-Xmx512m" `
+    @iconArgs
 
 if ($LASTEXITCODE -ne 0) { throw "jpackage failed" }
 Write-Host "  App image created: $AppImageDir" -ForegroundColor Green
