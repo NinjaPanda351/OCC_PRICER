@@ -10,6 +10,8 @@ import com.cardpricer.gui.dialog.PriceCheckDialog;
 import com.cardpricer.gui.panel.trade.BountyAwareRenderer;
 import com.cardpricer.gui.panel.trade.PaymentTypePanel;
 import com.cardpricer.gui.panel.trade.TradeSummaryPanel;
+import com.cardpricer.gui.panel.trade.TradeAutosaveController;
+import com.cardpricer.gui.panel.trade.TradeCardPreview;
 import com.cardpricer.gui.panel.trade.TradeShortcutRegistry;
 import com.cardpricer.gui.panel.trade.TradeTableModel;
 import com.cardpricer.model.Card;
@@ -109,7 +111,7 @@ public class TradePanel extends JPanel {
 
     // Input field
     private JTextField cardCodeField;
-    private JLabel cardPreviewLabel;
+    private TradeCardPreview cardPreview;
 
     // Table
     private JTable cardTable;
@@ -125,14 +127,6 @@ public class TradePanel extends JPanel {
     private JTextField driversLicenseField;
     private JTextField checkNumberField;
 
-    // Preview card
-    private Card previewCard;
-    private String lastPreviewCode; // Track what code the preview is showing
-    private String previewFinish;
-    /** Stores the raw set code from the user's input (e.g. "plst") to distinguish
-     *  PLST entries so the table can show "PLST ARB 1" while saving "ARB 1". */
-    private String previewOriginalSetCode = "";
-
     /** Lazy-initialized hover image popup. */
     private CardImagePopup imagePopup;
 
@@ -143,7 +137,7 @@ public class TradePanel extends JPanel {
     private JButton savePdfBtn;
 
     // ── Feature: Autosave ─────────────────────────────────────────────────────
-    private Timer autosaveTimer;
+    private TradeAutosaveController autosaveController;
 
     // ── Feature: Undo ────────────────────────────────────────────────────────
     private TradeItem lastAddedItem = null;
@@ -228,10 +222,10 @@ public class TradePanel extends JPanel {
         SwingUtilities.invokeLater(() -> cardCodeField.requestFocusInWindow());
 
         // F5: offer crash-recovery restore, then start 60-second autosave timer
-        SwingUtilities.invokeLater(this::offerSessionRestore);
-        autosaveTimer = new Timer(60_000, e -> performAutosave());
-        autosaveTimer.setRepeats(true);
-        autosaveTimer.start();
+        autosaveController = new TradeAutosaveController(
+                this::buildCurrentSession, this::restoreSession, this::getParentWindow);
+        SwingUtilities.invokeLater(autosaveController::offerRestore);
+        autosaveController.start();
 
         // Reload buy rates when this panel becomes visible (Preferences may have changed)
         addHierarchyListener(e -> {
@@ -333,6 +327,11 @@ public class TradePanel extends JPanel {
         cardCodeField.setPreferredSize(new Dimension(400, 24));
         cardCodeField.setToolTipText("Type set code + number, press Enter to add");
 
+        // cardPreview depends on cardCodeField; create here after field is initialised
+        cardPreview = new TradeCardPreview(apiService, pricingService,
+                this::getParentWindow, cardCodeField, this::getImagePopup,
+                (card, finish, originalSetCode) -> addCard(card, finish, originalSetCode));
+
         cardCodeField.addKeyListener(new KeyAdapter() {
             @Override
             public void keyTyped(KeyEvent e) {
@@ -345,35 +344,15 @@ public class TradePanel extends JPanel {
             @Override
             public void keyReleased(KeyEvent e) {
                 if (e.getKeyCode() == KeyEvent.VK_ENTER) {
-                    // Format first, then search and add
-                    String input = cardCodeField.getText();
-                    ParsedCode parsed = CardCodeParser.parse(input);
-                    if (parsed != null) {
-                        String formatted = CardCodeParser.format(parsed);
-                        cardCodeField.setText(formatted);
-                    }
-
-                    // Check if we have a preview and if it matches the current input
-                    if (previewCard != null && parsed != null) {
-                        String currentCode = parsed.setCode() + " " + parsed.collectorNumber();
-                        // If preview doesn't match current input, clear it and fetch fresh
-                        if (lastPreviewCode == null || !lastPreviewCode.equals(currentCode)) {
-                            clearPreview();
-                            fetchPreviewAndAdd();
-                        } else {
-                            // Preview matches, add it
-                            addCard();
-                        }
-                    } else {
-                        // No preview yet, fetch and add
-                        fetchPreviewAndAdd();
-                    }
+                    // Format the code field before dispatching
+                    ParsedCode parsed = CardCodeParser.parse(cardCodeField.getText());
+                    if (parsed != null) cardCodeField.setText(CardCodeParser.format(parsed));
+                    cardPreview.fetchAndAdd();
                 } else if ((e.getKeyCode() == KeyEvent.VK_F && e.isControlDown()) ||
                         e.getKeyCode() == KeyEvent.VK_F2) {
-                    // Ctrl+F or F2 to open search dialog
                     openSearchDialog();
                 } else {
-                    schedulePreview();
+                    cardPreview.schedulePreview();
                 }
             }
         });
@@ -382,11 +361,8 @@ public class TradePanel extends JPanel {
 
         panel.add(inputPanel, BorderLayout.CENTER);
 
-        // Bottom: Preview
-        cardPreviewLabel = new JLabel("Enter a card code above...");
-        cardPreviewLabel.setFont(cardPreviewLabel.getFont().deriveFont(Font.BOLD, 14f));
-        cardPreviewLabel.setBorder(new EmptyBorder(10, 5, 5, 5));
-        panel.add(cardPreviewLabel, BorderLayout.SOUTH);
+        // Bottom: live card preview label (owned by TradeCardPreview)
+        panel.add(cardPreview.getPreviewLabel(), BorderLayout.SOUTH);
 
         return panel;
     }
@@ -877,656 +853,81 @@ public class TradePanel extends JPanel {
     }
 
     // -------------------------------------------------------------------------
-    // Preview
-    // -------------------------------------------------------------------------
-
-    private Timer previewTimer;
-
-    private void schedulePreview() {
-        if (previewTimer != null) {
-            previewTimer.stop();
-        }
-
-        previewTimer = new Timer(500, e -> fetchPreview());
-        previewTimer.setRepeats(false);
-        previewTimer.start();
-    }
-
-    private void fetchPreview() {
-        String input = cardCodeField.getText();
-        if (input == null || input.trim().isEmpty() || input.trim().length() < 3) {
-            clearPreview();
-            return;
-        }
-
-        ParsedCode parsed = CardCodeParser.parse(input);
-        if (parsed == null) {
-            clearPreview();
-            return;
-        }
-
-        // Clear preview if the code changed significantly
-        if (lastPreviewCode != null && !lastPreviewCode.equals(parsed.setCode() + " " + parsed.collectorNumber())) {
-            clearPreview();
-        }
-
-        String fetchingCode = parsed.setCode() + " " + parsed.collectorNumber();
-
-        new SwingWorker<Card, Void>() {
-            @Override
-            protected Card doInBackground() throws Exception {
-                java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
-                        .lookup(parsed.setCode(), parsed.collectorNumber());
-                if (hit.isPresent()) return hit.get();
-                return apiService.fetchCard(parsed.setCode(), parsed.collectorNumber());
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    Card card = get();
-                    // Only display if the input hasn't changed
-                    String currentInput = cardCodeField.getText();
-                    ParsedCode currentParsed = CardCodeParser.parse(currentInput);
-                    if (currentParsed != null) {
-                        String currentCode = currentParsed.setCode() + " " + currentParsed.collectorNumber();
-                        if (currentCode.equals(fetchingCode)) {
-                            lastPreviewCode = fetchingCode;
-                            previewOriginalSetCode = parsed.setCode();
-                            displayPreview(card, parsed.finish());
-                        }
-                    }
-                } catch (Exception e) {
-                    clearPreview();
-                }
-            }
-        }.execute();
-    }
-
-    private void fetchPreviewAndAdd() {
-        String input = cardCodeField.getText();
-        if (input == null || input.trim().isEmpty()) {
-            return;
-        }
-
-        // Check if user typed "misc" for manual entry
-        if (input.trim().equalsIgnoreCase("misc")) {
-            promptForMiscCard();
-            return;
-        }
-
-        ParsedCode parsed = CardCodeParser.parse(input);
-        if (parsed == null) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Invalid card code format.\nUse: SET NUMBER or SET NUMBERF\nOr type 'misc' for manual entry",
-                    "Invalid Format",
-                    JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-
-        cardPreviewLabel.setText("Loading...");
-
-        new SwingWorker<Card, Void>() {
-            @Override
-            protected Card doInBackground() throws Exception {
-                java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
-                        .lookup(parsed.setCode(), parsed.collectorNumber());
-                if (hit.isPresent()) return hit.get();
-                return apiService.fetchCard(parsed.setCode(), parsed.collectorNumber());
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    Card card = get();
-                    previewCard = card;
-                    previewFinish = parsed.finish();
-                    previewOriginalSetCode = parsed.setCode();
-
-                    // Check if card has a price
-                    boolean isFoil = "F".equals(parsed.finish()) || "E".equals(parsed.finish()) || "S".equals(parsed.finish());
-                    boolean hasPrice = isFoil ? card.hasFoilPrice() : card.hasNormalPrice();
-
-                    if (!hasPrice) {
-                        // No price available - prompt user for manual entry
-                        promptForManualPriceOnCard(card, parsed);
-                        return;
-                    }
-
-                    displayPreview(card, parsed.finish());
-
-                    // Feature 8: auto-show card image for vintage sets so the
-                    // trader can visually verify the card before committing.
-                    if (VintageUtil.isVintageSet(card.getSetCode()) && card.getImageUrl() != null) {
-                        try {
-                            Point labelLoc = cardPreviewLabel.getLocationOnScreen();
-                            getImagePopup().show(card.getImageUrl(),
-                                    new Point(labelLoc.x + cardPreviewLabel.getWidth() + 12,
-                                              labelLoc.y));
-                        } catch (java.awt.IllegalComponentStateException ignored) {}
-                    }
-
-                    addCard();
-                } catch (Exception e) {
-                    // Check if it's a card not found error
-                    if (e.getMessage() != null && e.getMessage().contains("not found")) {
-                        // Card not found, prompt for manual entry
-                        promptForManualPrice(parsed);
-                    } else {
-                        JOptionPane.showMessageDialog(TradePanel.this,
-                                "Failed to fetch card: " + e.getMessage(),
-                                "API Error",
-                                JOptionPane.ERROR_MESSAGE);
-                        clearPreview();
-                    }
-                }
-            }
-        }.execute();
-    }
-
-    private void promptForManualPrice(ParsedCode parsed) {
-        String priceInput = JOptionPane.showInputDialog(getParentWindow(),
-                String.format("Card %s %s not found in Scryfall.\nEnter manual price:",
-                        parsed.setCode(), parsed.collectorNumber()),
-                "Manual Price Entry",
-                JOptionPane.QUESTION_MESSAGE);
-
-        if (priceInput == null || priceInput.trim().isEmpty()) {
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-            return;
-        }
-
-        try {
-            priceInput = priceInput.replace("$", "").replace(",", "").trim();
-            BigDecimal price = new BigDecimal(priceInput);
-
-            if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Price must be greater than $0.00",
-                        "Invalid Price",
-                        JOptionPane.WARNING_MESSAGE);
-                cardCodeField.setText("");
-                clearPreview();
-                cardCodeField.requestFocusInWindow();
-                return;
-            }
-
-            String code = parsed.setCode() + " " + parsed.collectorNumber();
-            if (!parsed.finish().isEmpty()) {
-                code += parsed.finish();
-            }
-
-            // Add to table with NM condition by default
-            tableModel.addRow(new Object[]{
-                    false,  // Checkbox unchecked by default
-                    code,
-                    "Misc Magic Card",
-                    "NM",
-                    1,      // Default qty = 1
-                    String.format("$%.2f", price), // Unit price
-                    String.format("$%.2f", price), // Total
-                    ""      // Rate placeholder
-            });
-
-            // Create a dummy TradeItem for the rows list
-            Card miscCard = new Card();
-            miscCard.setName("Misc Magic Card");
-            miscCard.setSetCode("MISC");
-            miscCard.setCollectorNumber("1");
-            miscCard.setRarity("common");
-            miscCard.setPrice(price.toString());
-
-            TradeItem item = new TradeItem(miscCard, false, 1);
-            rows.add(new TradeRow(item, "NM"));
-
-            refreshSummary();
-
-            // Auto-highlight and scroll to the newly added row
-            int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
-            cardTable.setRowSelectionInterval(viewRow, viewRow);
-            cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
-
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-
-        } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Invalid price format. Please enter a valid number.",
-                    "Invalid Price",
-                    JOptionPane.ERROR_MESSAGE);
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-        }
-    }
-
-    /**
-     * Prompts user for manual price when card exists but has no price
-     */
-    private void promptForManualPriceOnCard(Card card, ParsedCode parsed) {
-        boolean isFoil = "F".equals(parsed.finish()) || "E".equals(parsed.finish()) || "S".equals(parsed.finish());
-        String finishType = "E".equals(parsed.finish()) ? "etched"
-                : "S".equals(parsed.finish()) ? "surge foil"
-                : isFoil ? "foil" : "normal";
-
-        String priceInput = JOptionPane.showInputDialog(getParentWindow(),
-                String.format("Card '%s' has no %s price listed.\nEnter manual price:",
-                        card.getName(), finishType),
-                "Manual Price Entry",
-                JOptionPane.QUESTION_MESSAGE);
-
-        if (priceInput == null || priceInput.trim().isEmpty()) {
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-            return;
-        }
-
-        try {
-            priceInput = priceInput.replace("$", "").replace(",", "").trim();
-            BigDecimal price = new BigDecimal(priceInput);
-
-            if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Price must be greater than $0.00",
-                        "Invalid Price",
-                        JOptionPane.WARNING_MESSAGE);
-                cardCodeField.setText("");
-                clearPreview();
-                cardCodeField.requestFocusInWindow();
-                return;
-            }
-
-            // Set the price on the card
-            if (isFoil) {
-                card.setFoilPrice(price.toString());
-            } else {
-                card.setPrice(price.toString());
-            }
-
-            // Now display and add the card
-            previewCard = card;
-            previewFinish = parsed.finish();
-            displayPreview(card, parsed.finish());
-            addCard();
-
-        } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Invalid price format. Please enter a valid number.",
-                    "Invalid Price",
-                    JOptionPane.ERROR_MESSAGE);
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-        }
-    }
-
-    /**
-     * Prompts user to add a misc card with custom name and price
-     */
-    private void promptForMiscCard() {
-        // Create a dialog for misc card entry
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(5, 5, 5, 5);
-        gbc.anchor = GridBagConstraints.WEST;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-
-        JTextField nameField = new JTextField(30);
-        JTextField priceField = new JTextField(10);
-
-        // Auto-focus the name field when the dialog becomes visible
-        nameField.addHierarchyListener(e -> {
-            if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && nameField.isShowing()) {
-                SwingUtilities.invokeLater(nameField::requestFocusInWindow);
-            }
-        });
-
-        // Enter in name field moves focus to price field (does not submit yet)
-        nameField.addKeyListener(new KeyAdapter() {
-            @Override
-            public void keyPressed(KeyEvent e) {
-                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
-                    priceField.requestFocusInWindow();
-                    e.consume();
-                }
-            }
-        });
-
-        gbc.gridx = 0; gbc.gridy = 0;
-        panel.add(new JLabel("Card Name:"), gbc);
-
-        gbc.gridx = 1;
-        panel.add(nameField, gbc);
-
-        gbc.gridx = 0; gbc.gridy = 1;
-        panel.add(new JLabel("Price:"), gbc);
-
-        gbc.gridx = 1;
-        panel.add(priceField, gbc);
-
-        int result = JOptionPane.showConfirmDialog(getParentWindow(), panel,
-                "Add Misc Card", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-
-        if (result != JOptionPane.OK_OPTION) {
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-            return;
-        }
-
-        String cardName = nameField.getText().trim();
-        String priceInput = priceField.getText().trim();
-
-        if (cardName.isEmpty()) {
-            cardName = "Misc Magic Card";
-        }
-
-        if (priceInput.isEmpty()) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Price is required",
-                    "Missing Price",
-                    JOptionPane.WARNING_MESSAGE);
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-            return;
-        }
-
-        try {
-            priceInput = priceInput.replace("$", "").replace(",", "").trim();
-            BigDecimal price = new BigDecimal(priceInput);
-
-            if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Price must be greater than $0.00",
-                        "Invalid Price",
-                        JOptionPane.WARNING_MESSAGE);
-                cardCodeField.setText("");
-                clearPreview();
-                cardCodeField.requestFocusInWindow();
-                return;
-            }
-
-            // Add to table with NM condition by default
-            tableModel.addRow(new Object[]{
-                    false,  // Checkbox unchecked by default
-                    "MISC",
-                    cardName,
-                    "NM",
-                    1,      // Default qty = 1
-                    String.format("$%.2f", price), // Unit price
-                    String.format("$%.2f", price), // Total
-                    ""      // Rate placeholder
-            });
-
-            // Create a dummy TradeItem for the rows list
-            Card miscCard = new Card();
-            miscCard.setName(cardName);
-            miscCard.setSetCode("MISC");
-            miscCard.setCollectorNumber("1");
-            miscCard.setRarity("common");
-            miscCard.setPrice(price.toString());
-
-            TradeItem item = new TradeItem(miscCard, false, 1);
-            rows.add(new TradeRow(item, "NM"));
-
-            refreshSummary();
-
-            // Auto-highlight and scroll to the newly added row
-            int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
-            cardTable.setRowSelectionInterval(viewRow, viewRow);
-            cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
-
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-
-        } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Invalid price format. Please enter a valid number.",
-                    "Invalid Price",
-                    JOptionPane.ERROR_MESSAGE);
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-        }
-    }
-
-    private void displayPreview(Card card, String finish) {
-        previewCard = card;
-        previewFinish = finish;
-
-        StringBuilder text = new StringBuilder();
-        text.append("✓ ").append(card.getName());
-
-        if (card.getFrameEffectDisplay() != null) {
-            text.append(" - ").append(card.getFrameEffectDisplay());
-        }
-
-        BigDecimal price;
-        String finishName;
-
-        if ("F".equals(finish)) {
-            price = card.getFoilPriceAsBigDecimal();
-            finishName = "Foil";
-        } else if ("E".equals(finish)) {
-            price = card.getEtchedPriceAsBigDecimal();
-            finishName = "Etched";
-        } else if ("S".equals(finish)) {
-            price = card.getFoilPriceAsBigDecimal();
-            finishName = "Surge Foil";
-        } else {
-            price = card.getPriceAsBigDecimal();
-            finishName = "Normal";
-        }
-
-        BigDecimal roundedPrice = pricingService.applyPricingRules(price, card.getRarity());
-
-        text.append(String.format(" (%s) - $%.2f [%s %s]",
-                finishName, roundedPrice, card.getSetCode(), CardCodeParser.capitalize(card.getRarity())));
-
-        cardPreviewLabel.setText(text.toString());
-        cardPreviewLabel.setForeground(price.compareTo(BigDecimal.ZERO) > 0 ?
-                new Color(0, 120, 0) : Color.RED);
-    }
-
-    private void clearPreview() {
-        previewCard = null;
-        previewFinish = null;
-        lastPreviewCode = null;
-        previewOriginalSetCode = "";
-        cardPreviewLabel.setText("Enter a card code above...");
-        cardPreviewLabel.setForeground(UIManager.getColor("Label.foreground"));
-    }
-
-    // -------------------------------------------------------------------------
     // Card management
     // -------------------------------------------------------------------------
 
-    private void addCard() {
-        if (previewCard == null) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Please enter a valid card code",
-                    "No Card",
-                    JOptionPane.WARNING_MESSAGE);
-            return;
+    /**
+     * Callback target for {@link TradeCardPreview}: commits a resolved card to the trade table.
+     *
+     * @param card            the fetched (or manually-priced) card
+     * @param finish          finish code: {@code ""} normal, {@code "F"} foil,
+     *                        {@code "E"} etched, {@code "S"} surge foil
+     * @param originalSetCode raw set code from user input (e.g. {@code "plst"} for PLST cards,
+     *                        {@code "misc"} for misc-dialog entries)
+     */
+    private void addCard(Card card, String finish, String originalSetCode) {
+        boolean isFoil = "F".equals(finish) || "E".equals(finish) || "S".equals(finish);
+
+        // Build display code for the table
+        String code;
+        if ("misc".equalsIgnoreCase(originalSetCode)) {
+            code = "MISC";
+        } else if ("plst".equalsIgnoreCase(originalSetCode)) {
+            code = "PLST " + card.getSetCode() + " " + card.getCollectorNumber();
+        } else {
+            code = card.getSetCode() + " " + card.getCollectorNumber();
         }
-
-        boolean isFoil = "F".equals(previewFinish) || "E".equals(previewFinish) || "S".equals(previewFinish);
-
-        // Check if price is available, if not prompt for manual entry
-        if (("F".equals(previewFinish) || "S".equals(previewFinish)) && !previewCard.hasFoilPrice()) {
-            // Prompt for manual foil/surge-foil price
-            String finishLabel = "S".equals(previewFinish) ? "surge foil" : "foil";
-            String priceInput = JOptionPane.showInputDialog(getParentWindow(),
-                    String.format("Card '%s' has no %s price available.\nEnter manual price:",
-                            previewCard.getName(), finishLabel),
-                    "Manual Price Entry",
-                    JOptionPane.QUESTION_MESSAGE);
-
-            if (priceInput == null || priceInput.trim().isEmpty()) {
-                return; // User cancelled
-            }
-
-            try {
-                priceInput = priceInput.replace("$", "").replace(",", "").trim();
-                BigDecimal price = new BigDecimal(priceInput);
-
-                if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                    JOptionPane.showMessageDialog(getParentWindow(),
-                            "Price must be greater than $0.00",
-                            "Invalid Price",
-                            JOptionPane.WARNING_MESSAGE);
-                    return;
-                }
-
-                // Set the foil price
-                previewCard.setFoilPrice(price.toString());
-            } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Invalid price format. Please enter a valid number.",
-                        "Invalid Price",
-                        JOptionPane.ERROR_MESSAGE);
-                return;
-            }
-        } else if ("E".equals(previewFinish) && !previewCard.hasEtchedPrice()) {
-            // Prompt for manual etched price
-            String priceInput = JOptionPane.showInputDialog(getParentWindow(),
-                    String.format("Card '%s' has no etched price available.\nEnter manual price:",
-                            previewCard.getName()),
-                    "Manual Price Entry",
-                    JOptionPane.QUESTION_MESSAGE);
-
-            if (priceInput == null || priceInput.trim().isEmpty()) {
-                return; // User cancelled
-            }
-
-            try {
-                priceInput = priceInput.replace("$", "").replace(",", "").trim();
-                BigDecimal price = new BigDecimal(priceInput);
-
-                if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                    JOptionPane.showMessageDialog(getParentWindow(),
-                            "Price must be greater than $0.00",
-                            "Invalid Price",
-                            JOptionPane.WARNING_MESSAGE);
-                    return;
-                }
-
-                // Set the etched price
-                previewCard.setEtchedPrice(price.toString());
-            } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Invalid price format. Please enter a valid number.",
-                        "Invalid Price",
-                        JOptionPane.ERROR_MESSAGE);
-                return;
-            }
-        }
-
-        if (!isFoil && !previewCard.hasNormalPrice()) {
-            // Prompt for manual normal price
-            String priceInput = JOptionPane.showInputDialog(getParentWindow(),
-                    String.format("Card '%s' has no normal price available.\nEnter manual price:",
-                            previewCard.getName()),
-                    "Manual Price Entry",
-                    JOptionPane.QUESTION_MESSAGE);
-
-            if (priceInput == null || priceInput.trim().isEmpty()) {
-                return; // User cancelled
-            }
-
-            try {
-                priceInput = priceInput.replace("$", "").replace(",", "").trim();
-                BigDecimal price = new BigDecimal(priceInput);
-
-                if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                    JOptionPane.showMessageDialog(getParentWindow(),
-                            "Price must be greater than $0.00",
-                            "Invalid Price",
-                            JOptionPane.WARNING_MESSAGE);
-                    return;
-                }
-
-                // Set the normal price
-                previewCard.setPrice(price.toString());
-            } catch (NumberFormatException e) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Invalid price format. Please enter a valid number.",
-                        "Invalid Price",
-                        JOptionPane.ERROR_MESSAGE);
-                return;
-            }
-        }
-
-        TradeItem item = new TradeItem(previewCard, isFoil, 1, previewFinish);
-        rows.add(new TradeRow(item, "NM"));
-
-        Card card = item.getCard();
-        // For PLST cards, display "PLST ARB 1" in the table; saves use the underlying "ARB 1"
-        String code = "plst".equalsIgnoreCase(previewOriginalSetCode)
-                ? "PLST " + card.getSetCode() + " " + card.getCollectorNumber()
-                : card.getSetCode() + " " + card.getCollectorNumber();
-        if (isFoil) {
-            if ("E".equals(previewFinish)) {
-                code += "e";
-            } else if ("S".equals(previewFinish)) {
-                code += "s";
-            } else {
-                code += "f";
-            }
-        }
+        if (isFoil) code += "E".equals(finish) ? "e" : "S".equals(finish) ? "s" : "f";
 
         StringBuilder name = new StringBuilder(card.getName());
-        if (card.getFrameEffectDisplay() != null) {
+        if (card.getFrameEffectDisplay() != null)
             name.append(" - ").append(card.getFrameEffectDisplay());
-        }
         if (isFoil) {
-            String finishLabel = "E".equals(previewFinish) ? "Etched"
-                    : "S".equals(previewFinish) ? "Surge Foil" : "Foil";
+            String finishLabel = "E".equals(finish) ? "Etched"
+                    : "S".equals(finish) ? "Surge Foil" : "Foil";
             name.append(" (").append(finishLabel).append(")");
         }
 
+        TradeItem item = new TradeItem(card, isFoil, 1, finish);
+        rows.add(new TradeRow(item, "NM"));
+
         BigDecimal roundedPrice = pricingService.applyPricingRules(item.getUnitPrice(), card.getRarity());
 
-        // Feature 7: high-value confirmation — pause and verify before adding
+        // High-value confirmation — pause and verify before committing
         if (roundedPrice.compareTo(VintageUtil.HIGH_VALUE_THRESHOLD) >= 0) {
             if (!HighValueConfirmDialog.show(getParentWindow(), card, roundedPrice)) {
-                // User cancelled — roll back the optimistic list addition
+                // User cancelled — roll back the optimistic row addition
                 rows.remove(rows.size() - 1);
+                cardCodeField.setText("");
+                cardPreview.clear();
+                cardCodeField.requestFocusInWindow();
                 return;
             }
         }
 
         tableModel.addRow(new Object[]{
-                false,  // Checkbox unchecked by default
+                false,
                 code,
                 name.toString(),
-                "NM", // Default condition
-                1,    // Default qty = 1
-                String.format("$%.2f", roundedPrice), // Unit price
-                String.format("$%.2f", roundedPrice), // Total (qty * unit price)
-                ""    // Rate placeholder; set by refreshSummary()
+                "NM",
+                1,
+                String.format("$%.2f", roundedPrice),
+                String.format("$%.2f", roundedPrice),
+                ""
         });
 
         refreshSummary();
 
-        // Track undo state for the card just added
         lastAddedItem = item;
         lastAddedRow  = tableModel.getRowCount() - 1;
         if (undoBtn != null) undoBtn.setEnabled(true);
 
-        // Auto-highlight and scroll to the newly added row
         int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
         cardTable.setRowSelectionInterval(viewRow, viewRow);
         cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
 
         cardCodeField.setText("");
-        clearPreview();
+        cardPreview.clear();
         cardCodeField.requestFocusInWindow();
     }
 
@@ -2177,16 +1578,13 @@ public class TradePanel extends JPanel {
         String selectedFinish = dialog.getSelectedFinish();
 
         if (selectedCard != null) {
-            previewCard = selectedCard;
-            previewFinish = selectedFinish;
-            displayPreview(selectedCard, selectedFinish);
+            cardPreview.setPreview(selectedCard, selectedFinish, selectedCard.getSetCode());
 
             String code = selectedCard.getSetCode() + " " + selectedCard.getCollectorNumber();
             if (selectedFinish != null && !selectedFinish.isEmpty()) {
                 code += selectedFinish;
             }
             cardCodeField.setText(code);
-
             cardCodeField.requestFocusInWindow();
         }
     }
@@ -2399,20 +1797,30 @@ public class TradePanel extends JPanel {
     // F5: Autosave / crash recovery
     // -------------------------------------------------------------------------
 
-    /** Offers to restore a previously crashed session (called on first EDT tick). */
-    private void offerSessionRestore() {
-        if (!TradeSessionService.hasAutosave()) return;
-        int choice = JOptionPane.showConfirmDialog(getParentWindow(),
-                "An unsaved trade session was found.\nWould you like to restore it?",
-                "Restore Session",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.QUESTION_MESSAGE);
-        if (choice == JOptionPane.YES_OPTION) {
-            TradeSessionService.SavedSession session = TradeSessionService.load();
-            if (session != null) restoreSession(session);
-        } else {
-            TradeSessionService.clearAutosave();
+    /**
+     * Builds a {@link TradeSessionService.SavedSession} from the current table state.
+     * Returns {@code null} when the table is empty (signals the autosave controller
+     * to delete any existing autosave file rather than writing an empty one).
+     */
+    private TradeSessionService.SavedSession buildCurrentSession() {
+        if (tableModel.getRowCount() == 0) return null;
+        java.util.List<TradeSessionService.SessionRow> sessionRows = new ArrayList<>();
+        for (int i = 0; i < tableModel.getRowCount(); i++) {
+            String code      = (String) tableModel.getValueAt(i, TradeTableModel.COL_CODE);
+            String cardName  = (String) tableModel.getValueAt(i, TradeTableModel.COL_NAME);
+            String condition = (String) tableModel.getValueAt(i, TradeTableModel.COL_CONDITION);
+            Object qtyObj    = tableModel.getValueAt(i, TradeTableModel.COL_QTY);
+            int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
+            String priceStr  = ((String) tableModel.getValueAt(i, TradeTableModel.COL_UNIT_PRICE))
+                    .replace("$", "").replace(",", "").trim();
+            BigDecimal unitPrice;
+            try { unitPrice = new BigDecimal(priceStr); } catch (Exception e) { continue; }
+            sessionRows.add(new TradeSessionService.SessionRow(code, cardName, condition, qty, unitPrice));
         }
+        return new TradeSessionService.SavedSession(
+                traderNameField.getText().trim(),
+                customerNameField.getText().trim(),
+                sessionRows);
     }
 
     /** Restores a previously saved session into the trade table. */
@@ -2481,29 +1889,5 @@ public class TradePanel extends JPanel {
         }.execute();
     }
 
-    /** Writes current table contents to the autosave file. */
-    private void performAutosave() {
-        if (tableModel.getRowCount() == 0) {
-            TradeSessionService.clearAutosave();
-            return;
-        }
-        List<TradeSessionService.SessionRow> sessionRows = new ArrayList<>();
-        for (int i = 0; i < tableModel.getRowCount(); i++) {
-            String code = (String) tableModel.getValueAt(i, TradeTableModel.COL_CODE);
-            String cardName = (String) tableModel.getValueAt(i, TradeTableModel.COL_NAME);
-            String condition = (String) tableModel.getValueAt(i, TradeTableModel.COL_CONDITION);
-            Object qtyObj = tableModel.getValueAt(i, TradeTableModel.COL_QTY);
-            int qty = (qtyObj instanceof Integer) ? (Integer) qtyObj : Integer.parseInt(qtyObj.toString());
-            String priceStr = ((String) tableModel.getValueAt(i, TradeTableModel.COL_UNIT_PRICE))
-                    .replace("$", "").replace(",", "").trim();
-            BigDecimal unitPrice;
-            try { unitPrice = new BigDecimal(priceStr); } catch (Exception e) { continue; }
-            sessionRows.add(new TradeSessionService.SessionRow(code, cardName, condition, qty, unitPrice));
-        }
-        TradeSessionService.save(
-                traderNameField.getText().trim(),
-                customerNameField.getText().trim(),
-                sessionRows);
-    }
-
 }
+
