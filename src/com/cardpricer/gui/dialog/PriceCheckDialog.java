@@ -58,7 +58,7 @@ public class PriceCheckDialog extends JDialog {
         super(owner, "Quick Price Check", ModalityType.MODELESS);
         this.onAddCallback = onAddToTrade;
         this.apiService = new ScryfallApiService();
-        this.buyRateService = new BuyRateService();
+        this.buyRateService = BuyRateService.getInstance();
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setResizable(true);
         buildUI();
@@ -238,7 +238,7 @@ public class PriceCheckDialog extends JDialog {
             @Override
             protected Card doInBackground() throws Exception {
                 if (parsed != null) {
-                    return apiService.fetchCard(parsed.setCode, parsed.collectorNumber);
+                    return apiService.fetchCard(parsed.setCode(), parsed.collectorNumber());
                 } else {
                     String encoded = java.net.URLEncoder.encode(input, "UTF-8");
                     String url = "https://api.scryfall.com/cards/named?fuzzy=" + encoded;
@@ -252,7 +252,7 @@ public class PriceCheckDialog extends JDialog {
                 try {
                     Card card = get();
                     currentCard = card;
-                    String initialFinish = (parsed != null) ? parsed.finish : "";
+                    String initialFinish = (parsed != null) ? parsed.finish() : "";
                     onCardFetched(card, initialFinish);
                 } catch (CancellationException ignored) {
                     // Worker was cancelled — keep UI as-is

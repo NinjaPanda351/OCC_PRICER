@@ -103,20 +103,20 @@ public final class CardCodeParser {
     public static String format(ParsedCode code) {
         StringBuilder formatted = new StringBuilder();
 
-        if (code.setCode.equalsIgnoreCase("plst")) {
+        if (code.setCode().equalsIgnoreCase("plst")) {
             // PLST: "PLST arb-1" — hyphen preserved; strip any Scryfall API markers (★)
-            String collNum = code.collectorNumber.replace("★", "");
+            String collNum = code.collectorNumber().replace("★", "");
             formatted.append("PLST ").append(collNum);
         } else {
             // Strip Scryfall API markers (★ for surge foil) from the display number
-            String displayNum = code.collectorNumber.replace("★", "");
-            formatted.append(code.setCode.toUpperCase())
+            String displayNum = code.collectorNumber().replace("★", "");
+            formatted.append(code.setCode().toUpperCase())
                     .append(" ")
                     .append(displayNum);
         }
 
-        if (!code.finish.isEmpty()) {
-            formatted.append(code.finish.toLowerCase()); // Lowercase, no space
+        if (!code.finish().isEmpty()) {
+            formatted.append(code.finish().toLowerCase()); // Lowercase, no space
         }
 
         return formatted.toString();

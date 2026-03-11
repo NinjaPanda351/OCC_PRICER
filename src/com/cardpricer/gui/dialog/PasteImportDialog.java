@@ -287,16 +287,16 @@ public class PasteImportDialog extends JDialog {
                 List<ParsedCode> codes = parseMoxfieldLine(trimmed);
                 if (!codes.isEmpty()) {
                     ParsedCode first = codes.get(0);
-                    String finishDisplay = switch (first.finish) {
+                    String finishDisplay = switch (first.finish()) {
                         case "F" -> "foil";
                         case "E" -> "etched";
                         case "S" -> "surge foil";
                         default  -> "normal";
                     };
                     int qty = codes.size();
-                    String setDisplay = first.setCode.equalsIgnoreCase("plst")
-                            ? "PLST " + first.collectorNumber
-                            : first.setCode.toUpperCase() + " " + first.collectorNumber;
+                    String setDisplay = first.setCode().equalsIgnoreCase("plst")
+                            ? "PLST " + first.collectorNumber()
+                            : first.setCode().toUpperCase() + " " + first.collectorNumber();
                     String display = (qty > 1 ? qty + "\u00d7 " : "") + setDisplay
                             + "  \u2192  " + finishDisplay;
                     previewModel.addElement(new ListItem("\u2713 " + display, true));
@@ -310,7 +310,7 @@ public class PasteImportDialog extends JDialog {
             } else {
                 ParsedCode parsed = CardCodeParser.parse(trimmed);
                 if (parsed != null) {
-                    String finishDisplay = switch (parsed.finish) {
+                    String finishDisplay = switch (parsed.finish()) {
                         case "F" -> "foil";
                         case "E" -> "etched";
                         case "S" -> "surge foil";
@@ -434,7 +434,7 @@ public class PasteImportDialog extends JDialog {
 
                     // Try the local catalog first (O(1), instant)
                     java.util.Optional<Card> hit =
-                            catalog.lookup(parsed.setCode, parsed.collectorNumber);
+                            catalog.lookup(parsed.setCode(), parsed.collectorNumber());
                     if (hit.isPresent()) {
                         FetchedResult r = new FetchedResult(parsed, hit.get(), null);
                         allResults.add(r);
@@ -444,7 +444,7 @@ public class PasteImportDialog extends JDialog {
                         // Catalog miss — fall back to Scryfall API
                         try {
                             Card card = apiService.fetchCard(
-                                    parsed.setCode, parsed.collectorNumber);
+                                    parsed.setCode(), parsed.collectorNumber());
                             FetchedResult r = new FetchedResult(parsed, card, null);
                             allResults.add(r);
                             publish(r);
@@ -465,14 +465,14 @@ public class PasteImportDialog extends JDialog {
                     String label;
                     if (result.ok()) {
                         BigDecimal price = getDisplayPrice(result);
-                        String finishTag = finishTag(result.parsed().finish);
+                        String finishTag = finishTag(result.parsed().finish());
                         label = "\u2713 " + result.card().getName()
                                 + finishTag
                                 + "   $" + String.format("%.2f", price);
                         resultModel.addElement(new ListItem(label, true));
                     } else {
-                        String code = result.parsed().setCode
-                                + " " + result.parsed().collectorNumber;
+                        String code = result.parsed().setCode()
+                                + " " + result.parsed().collectorNumber();
                         label = "\u2717 " + code + " \u2014 "
                                 + (result.errorMsg() != null ? result.errorMsg() : "fetch failed");
                         resultModel.addElement(new ListItem(label, false));
@@ -511,7 +511,7 @@ public class PasteImportDialog extends JDialog {
 
     private static BigDecimal getDisplayPrice(FetchedResult r) {
         Card card = r.card();
-        return switch (r.parsed().finish) {
+        return switch (r.parsed().finish()) {
             case "F", "S" -> card.hasFoilPrice()   ? card.getFoilPriceAsBigDecimal()   : BigDecimal.ZERO;
             case "E"      -> card.hasEtchedPrice()  ? card.getEtchedPriceAsBigDecimal() : BigDecimal.ZERO;
             default       -> card.hasNormalPrice()  ? card.getPriceAsBigDecimal()       : BigDecimal.ZERO;

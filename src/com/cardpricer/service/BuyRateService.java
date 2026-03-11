@@ -58,6 +58,12 @@ public class BuyRateService {
     /** Bounty map keyed by card name upper-cased. */
     private Map<String, BountyCard> bounties = new HashMap<>();
 
+    /** Returns the application-wide singleton instance. */
+    public static BuyRateService getInstance() { return Holder.INSTANCE; }
+    private static final class Holder {
+        static final BuyRateService INSTANCE = new BuyRateService();
+    }
+
     /**
      * Creates the service and loads persisted rules/bounties immediately.
      */

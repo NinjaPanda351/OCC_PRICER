@@ -133,7 +133,7 @@ public class PreferencesPanel extends JPanel {
     private JButton    loadCatalogBtn;
 
     // Buy Rates tab state
-    private final BuyRateService buyRateService = new BuyRateService();
+    private final BuyRateService buyRateService = BuyRateService.getInstance();
     private DefaultTableModel rulesTableModel;
     private JLabel buyRatesStatusLabel;
     private DefaultTableModel bountyTableModel;

@@ -23,7 +23,7 @@ public class TradeReceivingExportService {
     private static final String DATA_DIRECTORY =
             com.cardpricer.util.AppDataDirectory.tradesPath();
 
-    private final PricingService pricingService = new PricingService();
+    private final PricingService pricingService = PricingService.getInstance();
 
     private void ensureDataDirectoryExists() {
         java.io.File dataDir = new java.io.File(DATA_DIRECTORY);

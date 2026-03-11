@@ -97,7 +97,7 @@ public class CardEntry {
      * <p>Rounding: below $10 round to nearest $0.50; $10 and above round to nearest $1.00.
      */
     public BigDecimal getRoundedPrice() {
-        return new PricingService().applyPricingRules(myPrice, myRarity);
+        return PricingService.getInstance().applyPricingRules(myPrice, myRarity);
     }
 
     /**

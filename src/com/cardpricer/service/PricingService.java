@@ -23,6 +23,12 @@ import java.math.RoundingMode;
  */
 public class PricingService {
 
+    /** Returns the application-wide singleton instance. */
+    public static PricingService getInstance() { return Holder.INSTANCE; }
+    private static final class Holder {
+        static final PricingService INSTANCE = new PricingService();
+    }
+
     private static final BigDecimal NINE_FIFTY = new BigDecimal("9.50");
 
     /**
