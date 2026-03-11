@@ -329,7 +329,7 @@ public class TradePanel extends JPanel {
 
         // cardPreview depends on cardCodeField; create here after field is initialised
         cardPreview = new TradeCardPreview(apiService, pricingService,
-                this::getParentWindow, cardCodeField, this::getImagePopup,
+                getParentWindow(), cardCodeField, this::getImagePopup,
                 (card, finish, originalSetCode) -> addCard(card, finish, originalSetCode));
 
         cardCodeField.addKeyListener(new KeyAdapter() {
