@@ -49,7 +49,12 @@ public final class CardConstants {
     /** Exact divisor for check-payment cost calculation (price ÷ 3). */
     public static final BigDecimal PAYMENT_DIVISOR_CHECK = new BigDecimal("3");
 
-    /** Minimum delay between Scryfall API requests to respect the rate limit (ms). */
+    /**
+     * Minimum delay between individual card lookups (/cards/{set}/{num} — 10 req/sec limit = 100 ms).
+     * Kept at 1000 ms for conservative compliance. Used between sets in BulkPricerPanel
+     * and between lookups in PasteImportDialog.
+     * Note: /cards/search pagination uses ScryfallApiService.SEARCH_RATE_LIMIT_MS (500 ms).
+     */
     public static final int API_RATE_LIMIT_MS = 1000;
 
     /** Debounce delay for the card-preview live-search field (ms). */

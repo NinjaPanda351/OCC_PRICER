@@ -70,7 +70,7 @@ public class SetList {
             "POR", "PTK", "P02",
             "PFI", "PGB", "SLI", "PCY",
             "RAV", "RNA", "GK2", "CLU", "RVR", "RTR",
-            "ROE", "RIX", "SOK", "SOM", "SCG", "SLD",
+            "ROE", "RIX", "SOK", "SOM", "SCG", "SLD", "SOS", "SOC", "SOA",
             "SHM", "SOI", "ALA",
             "SS3", "SS2", "SS1", "SPG",
             "S99", "S00", "SCD",

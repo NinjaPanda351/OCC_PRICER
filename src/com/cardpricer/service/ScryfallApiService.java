@@ -24,7 +24,10 @@ public class ScryfallApiService {
     private static final String SEARCH_API = "https://api.scryfall.com/cards/search";
     private static final String CARD_API = "https://api.scryfall.com/cards";
     private static final String USER_AGENT = "CardPricerApp/1.0";
-    private static final int RATE_LIMIT_MS = 100; // Scryfall allows 10 requests/second
+    /** /cards/search is limited to 2 req/sec — wait at least 500 ms between paginated calls. */
+    private static final int SEARCH_RATE_LIMIT_MS = 500;
+    /** How long to pause after receiving HTTP 429 before retrying (Scryfall docs: 30 seconds). */
+    private static final int RATE_LIMITED_BACKOFF_MS = 30_000;
 
     /**
      * Fetches all cards from a specific set
@@ -51,7 +54,7 @@ public class ScryfallApiService {
                 // Check if there are more pages
                 if (response.getBoolean("has_more")) {
                     nextPage = response.getString("next_page");
-                    Thread.sleep(RATE_LIMIT_MS); // Respect API rate limits
+                    Thread.sleep(SEARCH_RATE_LIMIT_MS); // /cards/search: 2 req/sec
                 } else {
                     nextPage = null;
                 }
@@ -102,6 +105,10 @@ public class ScryfallApiService {
      * @throws ScryfallApiException if the call fails
      */
     public JSONObject makeApiCall(String urlStr) throws ScryfallApiException {
+        return makeApiCall(urlStr, false);
+    }
+
+    private JSONObject makeApiCall(String urlStr, boolean isRetry) throws ScryfallApiException {
         HttpURLConnection conn = null;
         try {
             URI uri = new URI(urlStr);
@@ -113,6 +120,16 @@ public class ScryfallApiService {
             conn.setReadTimeout(10000);
 
             int responseCode = conn.getResponseCode();
+
+            if (responseCode == 429) {
+                if (isRetry) {
+                    throw new ScryfallApiException("Rate limited by Scryfall (HTTP 429) even after backoff — aborting");
+                }
+                System.err.println("[ScryfallApiService] HTTP 429 — backing off " + RATE_LIMITED_BACKOFF_MS / 1000 + "s before retry");
+                conn.disconnect();
+                Thread.sleep(RATE_LIMITED_BACKOFF_MS);
+                return makeApiCall(urlStr, true);
+            }
 
             // Handle different response codes
             if (responseCode == 404) {
@@ -135,6 +152,9 @@ public class ScryfallApiService {
 
             return new JSONObject(response.toString());
 
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ScryfallApiException("Request interrupted", e);
         } catch (Exception e) {
             if (e instanceof ScryfallApiException) {
                 throw (ScryfallApiException) e;
