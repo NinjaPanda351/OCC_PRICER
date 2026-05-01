@@ -1,5 +1,6 @@
 package com.cardpricer.gui;
 
+import com.cardpricer.gui.dialog.HelpDialog;
 import com.cardpricer.gui.panel.BulkPricerPanel;
 import com.cardpricer.gui.panel.FileManagerPanel;
 import com.cardpricer.gui.panel.InventoryPanel;
@@ -196,10 +197,13 @@ public class MainSwingApplication {
 
         JButton btnPrefs = createActionButton("\u2699\uFE0F  Preferences", () -> showScreen("preferences", "Preferences"));
         JButton btnAbout = createActionButton("\u2139\uFE0F  About", this::showAboutDialog);
+        JButton btnHelp  = createActionButton("\uD83D\uDCE7  Help! Jayden", () -> HelpDialog.show(frame));
 
         sidebar.add(btnPrefs);
         sidebar.add(Box.createVerticalStrut(6));
         sidebar.add(btnAbout);
+        sidebar.add(Box.createVerticalStrut(6));
+        sidebar.add(btnHelp);
 
         // Default selection — also apply the active border immediately
         btnHome.setSelected(true);

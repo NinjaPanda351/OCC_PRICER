@@ -78,7 +78,7 @@ public class SetList {
             "STA", "STX",
             "STH",
             "TDM", "TDC",
-            "TMP",
+            "TMP", "TMT", "TMC",  "PZA",
             "BRO", "BRR", "BRC",
             "LTR", "LTC",
             "LCI", "LCC",
