@@ -6,7 +6,7 @@ import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
+import java.math.RoundingMode; // used by updatePartialCheck / updatePartialCredit
 
 /**
  * Self-contained payment-method selector (store credit, check, inventory, partial).
@@ -29,11 +29,6 @@ public class PaymentTypePanel extends JPanel {
 
     /** Current trade total, updated via setTotal(). */
     private BigDecimal currentTotal = BigDecimal.ZERO;
-
-    /** Tiered credit seed for partial split; null → equal split fallback. */
-    private BigDecimal pendingCreditSeed = null;
-    /** Tiered check seed for partial split; null → equal split fallback. */
-    private BigDecimal pendingCheckSeed  = null;
 
     private final Runnable onSelectionChanged;
 
@@ -141,12 +136,8 @@ public class PaymentTypePanel extends JPanel {
      * @param checkSeed  tiered check payout suggestion, or {@code null}
      */
     public void setTotal(BigDecimal total, BigDecimal creditSeed, BigDecimal checkSeed) {
-        this.currentTotal  = total;
-        this.pendingCreditSeed = creditSeed;
-        this.pendingCheckSeed  = checkSeed;
-        if (partialRadio.isSelected() && partialPaymentPanel.isVisible()) {
-            updatePartialSplit();
-        }
+        this.currentTotal = total;
+        // creditSeed / checkSeed retained for API compatibility but not used to auto-fill fields
     }
 
     /**
@@ -214,22 +205,9 @@ public class PaymentTypePanel extends JPanel {
     }
 
     private void updatePartialSplit() {
-        try {
-            if (pendingCreditSeed != null && pendingCheckSeed != null) {
-                // Use tiered payout seeds from BuyRateService
-                partialCreditField.setText(String.format("%.2f", pendingCreditSeed));
-                partialCheckField.setText(String.format("%.2f", pendingCheckSeed));
-            } else {
-                // Fallback: equal 50/50 split of total
-                BigDecimal half = currentTotal.divide(new BigDecimal("2"), 2, RoundingMode.HALF_UP);
-                partialCreditField.setText(String.format("%.2f", half));
-                partialCheckField.setText(String.format("%.2f", half));
-            }
-            updatePartialTotal();
-        } catch (Exception e) {
-            partialCreditField.setText("0.00");
-            partialCheckField.setText("0.00");
-        }
+        partialCreditField.setText("0.00");
+        partialCheckField.setText("0.00");
+        updatePartialTotal();
     }
 
     private void updatePartialCheck() {

@@ -144,6 +144,7 @@ public class TradePanel extends JPanel {
     private String lastSavedTxtPath = null;
     private JButton printReceiptBtn;
     private JButton savePdfBtn;
+    private JButton saveExportBtn;
 
     // ── Feature: Autosave ─────────────────────────────────────────────────────
     private Timer autosaveTimer;
@@ -166,6 +167,31 @@ public class TradePanel extends JPanel {
         } catch (Exception e) {
             return s1.compareTo(s2);
         }
+    };
+
+    /**
+     * Natural-sort comparator for the Code column: treats embedded digit runs as numbers
+     * so "TDM 2" sorts before "TDM 11" instead of after.
+     */
+    private static final java.util.Comparator<String> NATURAL_SORT_COMPARATOR = (a, b) -> {
+        int i = 0, j = 0;
+        while (i < a.length() && j < b.length()) {
+            char ca = a.charAt(i), cb = b.charAt(j);
+            if (Character.isDigit(ca) && Character.isDigit(cb)) {
+                int ni = i, nj = j;
+                while (ni < a.length() && Character.isDigit(a.charAt(ni))) ni++;
+                while (nj < b.length() && Character.isDigit(b.charAt(nj))) nj++;
+                int diff = Integer.compare(
+                        Integer.parseInt(a.substring(i, ni)),
+                        Integer.parseInt(b.substring(j, nj)));
+                if (diff != 0) return diff;
+                i = ni; j = nj;
+            } else {
+                if (ca != cb) return Character.compare(ca, cb);
+                i++; j++;
+            }
+        }
+        return (a.length() - i) - (b.length() - j);
     };
 
     /**
@@ -295,12 +321,14 @@ public class TradePanel extends JPanel {
 
     /** Called by PaymentTypePanel whenever the radio selection changes. */
     private void onPaymentSelectionChanged() {
-        boolean isCheck = paymentTypePanel.isCheckSelected();
-        checkNumberField.setEnabled(isCheck);
-        if (!isCheck) {
+        String type = paymentTypePanel.getPaymentType();
+        boolean needsCheck = "check".equals(type) || "partial".equals(type);
+        checkNumberField.setEnabled(needsCheck);
+        if (!needsCheck) {
             checkNumberField.setText("");
-        } else {
-            checkNumberField.requestFocusInWindow();
+        }
+        if (saveExportBtn != null) {
+            saveExportBtn.setText("inventory".equals(type) ? "Export to Inventory (POS)" : "Save Trade & Export POS");
         }
         refreshSummary();
     }
@@ -372,8 +400,6 @@ public class TradePanel extends JPanel {
 
         cardCodeField = new JTextField();
         cardCodeField.setFont(cardCodeField.getFont().deriveFont(Font.PLAIN, 20f));
-        cardCodeField.setMinimumSize(new Dimension(100, 24));
-        cardCodeField.setPreferredSize(new Dimension(400, 24));
         cardCodeField.setToolTipText("Type set code + number, press Enter to add");
 
         cardCodeField.addKeyListener(new KeyAdapter() {
@@ -521,7 +547,9 @@ public class TradePanel extends JPanel {
         cardTable.setRowSorter(sorter);
         // Don't trigger any initial sort - maintains insertion order
 
-        // Numeric price comparator for the Unit Price column (column 5) and Total column (column 6)
+        // Natural sort for Code column (col 1): "TDM 2" before "TDM 11"
+        sorter.setComparator(1, NATURAL_SORT_COMPARATOR);
+        // Numeric price comparator for Unit Price (col 5) and Total (col 6)
         sorter.setComparator(5, PRICE_COMPARATOR);
         sorter.setComparator(6, PRICE_COMPARATOR);
         sorter.setSortable(7, false);
@@ -883,9 +911,8 @@ public class TradePanel extends JPanel {
         JButton vintageBtn   = AppTheme.secondaryButton("Vintage Sets (F4)");
         JButton pasteListBtn = AppTheme.secondaryButton("Paste List (Ctrl+L)");
 
-        // ── Row 2: Export POS | Save List | Print Receipt | Save as PDF ───────
-        JButton exportInventoryBtn = AppTheme.secondaryButton("Export to POS (CSV)");
-        JButton saveListBtn        = AppTheme.primaryButton("Save Card List");
+        // ── Row 2: Save & Export | Print Receipt | Save as PDF ───────────────
+        saveExportBtn = AppTheme.primaryButton("Save Trade & Export POS");
         printReceiptBtn = AppTheme.secondaryButton("Print Receipt");
         savePdfBtn      = AppTheme.secondaryButton("Save as PDF");
         printReceiptBtn.setEnabled(false);
@@ -894,17 +921,17 @@ public class TradePanel extends JPanel {
         // Apply consistent sizing
         for (JButton btn : new JButton[]{
                 searchBtn, clearBtn, undoBtn, vintageBtn, pasteListBtn,
-                exportInventoryBtn, saveListBtn, printReceiptBtn, savePdfBtn}) {
+                printReceiptBtn, savePdfBtn}) {
             btn.setPreferredSize(new Dimension(165, 36));
         }
+        saveExportBtn.setPreferredSize(new Dimension(210, 36));
 
         searchBtn.addActionListener(e -> openSearchDialog());
         clearBtn.addActionListener(e -> clearAll());
         vintageBtn.addActionListener(e -> showVintageReference());
         undoBtn.addActionListener(e -> undoLastCard());
         pasteListBtn.addActionListener(e -> showPasteImportDialog());
-        exportInventoryBtn.addActionListener(e -> exportToPOS());
-        saveListBtn.addActionListener(e -> saveList());
+        saveExportBtn.addActionListener(e -> saveAndExport());
         printReceiptBtn.addActionListener(e -> doPrintReceipt());
         savePdfBtn.addActionListener(e -> doSaveAsPdf());
 
@@ -916,8 +943,7 @@ public class TradePanel extends JPanel {
         row1.add(pasteListBtn);
 
         JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
-        row2.add(exportInventoryBtn);
-        row2.add(saveListBtn);
+        row2.add(saveExportBtn);
         row2.add(printReceiptBtn);
         row2.add(savePdfBtn);
 
@@ -994,9 +1020,13 @@ public class TradePanel extends JPanel {
         new SwingWorker<Card, Void>() {
             @Override
             protected Card doInBackground() throws Exception {
-                java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
-                        .lookup(parsed.setCode, parsed.collectorNumber);
-                if (hit.isPresent()) return hit.get();
+                try {
+                    java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
+                            .lookup(parsed.setCode, parsed.collectorNumber);
+                    if (hit.isPresent()) return hit.get();
+                } catch (Exception ignored) {
+                    // catalog miss or error — fall through to API
+                }
                 return apiService.fetchCard(parsed.setCode, parsed.collectorNumber);
             }
 
@@ -1048,9 +1078,13 @@ public class TradePanel extends JPanel {
         new SwingWorker<Card, Void>() {
             @Override
             protected Card doInBackground() throws Exception {
-                java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
-                        .lookup(parsed.setCode, parsed.collectorNumber);
-                if (hit.isPresent()) return hit.get();
+                try {
+                    java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
+                            .lookup(parsed.setCode, parsed.collectorNumber);
+                    if (hit.isPresent()) return hit.get();
+                } catch (Exception ignored) {
+                    // catalog miss or error — fall through to API
+                }
                 return apiService.fetchCard(parsed.setCode, parsed.collectorNumber);
             }
 
@@ -2163,6 +2197,20 @@ public class TradePanel extends JPanel {
                     JOptionPane.ERROR_MESSAGE);
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Combined action: in inventory mode delegates to {@link #addToInventory()};
+     * otherwise saves the TXT receipt via {@link #saveList()} then exports the
+     * POS CSV via {@link #exportToPOS()}.
+     */
+    private void saveAndExport() {
+        if ("inventory".equals(paymentTypePanel.getPaymentType())) {
+            addToInventory();
+            return;
+        }
+        saveList();
+        exportToPOS();
     }
 
     private void saveList() {
