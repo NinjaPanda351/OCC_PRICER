@@ -9,6 +9,7 @@ import com.cardpricer.service.TradeHistoryService;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableRowSorter;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
@@ -199,7 +200,10 @@ public class FileManagerPanel extends JPanel {
         sharedTable.setFont(sharedTable.getFont().deriveFont(14f));
         sharedTable.setRowHeight(28);
         sharedTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        sharedTable.setAutoCreateRowSorter(true);
+        TableRowSorter<DefaultTableModel> sharedSorter = new TableRowSorter<>(sharedTableModel);
+        sharedSorter.setComparator(2, FileManagerPanel::compareSizeStrings); // Size — numeric
+        sharedSorter.setSortKeys(List.of(new RowSorter.SortKey(3, SortOrder.DESCENDING))); // newest first
+        sharedTable.setRowSorter(sharedSorter);
         sharedTable.getColumnModel().getColumn(0).setPreferredWidth(300);
         sharedTable.getColumnModel().getColumn(1).setPreferredWidth(80);
         sharedTable.getColumnModel().getColumn(2).setPreferredWidth(80);
@@ -327,8 +331,11 @@ public class FileManagerPanel extends JPanel {
         fileTable.getColumnModel().getColumn(3).setPreferredWidth(150); // Date
         fileTable.getColumnModel().getColumn(4).setPreferredWidth(250); // Path
 
-        // Enable table sorting
-        fileTable.setAutoCreateRowSorter(true);
+        // Enable table sorting — newest first, numeric size/amount comparators
+        TableRowSorter<DefaultTableModel> fileSorter = new TableRowSorter<>(tableModel);
+        fileSorter.setComparator(2, FileManagerPanel::compareSizeStrings); // Size — numeric
+        fileSorter.setSortKeys(List.of(new RowSorter.SortKey(3, SortOrder.DESCENDING))); // newest first
+        fileTable.setRowSorter(fileSorter);
 
         JScrollPane scrollPane = new JScrollPane(fileTable);
         scrollPane.setBorder(BorderFactory.createTitledBorder("Generated Files"));
@@ -438,6 +445,21 @@ public class FileManagerPanel extends JPanel {
         return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
     }
 
+    /** Parses a size string produced by {@link #formatFileSize} back to bytes for numeric sorting. */
+    private static long parseSizeBytes(String s) {
+        try {
+            if (s.endsWith(" B"))  return Long.parseLong(s.replace(" B", "").trim());
+            if (s.endsWith(" KB")) return (long)(Double.parseDouble(s.replace(" KB", "").trim()) * 1024);
+            if (s.endsWith(" MB")) return (long)(Double.parseDouble(s.replace(" MB", "").trim()) * 1024 * 1024);
+        } catch (Exception ignored) {}
+        return 0;
+    }
+
+    /** Comparator for size strings: numeric order rather than lexicographic. */
+    private static int compareSizeStrings(Object a, Object b) {
+        return Long.compare(parseSizeBytes(a.toString()), parseSizeBytes(b.toString()));
+    }
+
     // ── History Tab ───────────────────────────────────────────────────────────
 
     private JPanel createHistoryTab() {
@@ -483,7 +505,20 @@ public class FileManagerPanel extends JPanel {
         historyTable.setFont(historyTable.getFont().deriveFont(13f));
         historyTable.setRowHeight(26);
         historyTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        historyTable.setAutoCreateRowSorter(true);
+        TableRowSorter<DefaultTableModel> historySorter = new TableRowSorter<>(historyTableModel);
+        historySorter.setComparator(3, (a, b) -> {   // Total Value — numeric
+            try {
+                double va = Double.parseDouble(a.toString().replace("$", "").replace(",", "").trim());
+                double vb = Double.parseDouble(b.toString().replace("$", "").replace(",", "").trim());
+                return Double.compare(va, vb);
+            } catch (Exception ignored) { return a.toString().compareTo(b.toString()); }
+        });
+        historySorter.setComparator(4, (a, b) -> {   // # Cards — numeric
+            try { return Integer.compare(Integer.parseInt(a.toString()), Integer.parseInt(b.toString())); }
+            catch (Exception ignored) { return a.toString().compareTo(b.toString()); }
+        });
+        historySorter.setSortKeys(List.of(new RowSorter.SortKey(0, SortOrder.DESCENDING))); // newest first
+        historyTable.setRowSorter(historySorter);
         historyTable.getColumnModel().getColumn(0).setPreferredWidth(130);
         historyTable.getColumnModel().getColumn(1).setPreferredWidth(140);
         historyTable.getColumnModel().getColumn(2).setPreferredWidth(170);
