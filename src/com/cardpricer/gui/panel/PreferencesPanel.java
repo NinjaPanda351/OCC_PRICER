@@ -67,7 +67,7 @@ public class PreferencesPanel extends JPanel {
 
     private static final Preferences prefs = Preferences.userNodeForPackage(PreferencesPanel.class);
     private static final String THEME_KEY              = "app.theme";
-    static final         String SHARED_FOLDER_KEY      = "shared.trades.folder";
+    public static final  String SHARED_FOLDER_KEY      = "shared.trades.folder";
 
     /**
      * Registry mapping theme display names to their application actions.
@@ -334,7 +334,7 @@ public class PreferencesPanel extends JPanel {
         JPanel rulesBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
 
         JButton addRowBtn = new JButton("Add Row");
-        addRowBtn.addActionListener(e -> rulesTableModel.addRow(new String[]{"0.00", "50", "33"}));
+        addRowBtn.addActionListener(e -> rulesTableModel.addRow(new String[]{"0.00", "50", "33.33"}));
 
         JButton removeRowBtn = AppTheme.dangerButton("Remove Selected");
         removeRowBtn.addActionListener(e -> {

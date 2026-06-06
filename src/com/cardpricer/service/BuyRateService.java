@@ -12,7 +12,9 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -30,7 +32,7 @@ import java.util.prefs.Preferences;
  * <ol>
  *   <li>Check the bounty map by card name — bounty always wins if found.</li>
  *   <li>Walk rules sorted descending by threshold; first match wins.</li>
- *   <li>If no rules loaded (corruption guard), use hardcoded defaults (50% / 33%).</li>
+ *   <li>If no rules loaded (corruption guard), use hardcoded defaults (50% / 33.33%).</li>
  * </ol>
  *
  * <h3>Reload / generation counter</h3>
@@ -39,11 +41,12 @@ import java.util.prefs.Preferences;
  */
 public class BuyRateService {
 
-    private static final String RULES_KEY    = "buy.rate.rules";
-    private static final String BOUNTIES_KEY = "buy.rate.bounties";
+    private static final String RULES_KEY       = "buy.rate.rules";
+    private static final String BOUNTIES_KEY    = "buy.rate.bounties";
+    private static final String SHARED_FILE     = "buy_rates.json";
 
     private static final BigDecimal DEFAULT_CREDIT    = new BigDecimal("0.50");
-    private static final BigDecimal DEFAULT_CHECK     = new BigDecimal("0.33");
+    private static final BigDecimal DEFAULT_CHECK     = new BigDecimal("0.3333");
     private static final BigDecimal DEFAULT_THRESHOLD = BigDecimal.ZERO;
 
     private static final Preferences PREFS =
@@ -57,6 +60,9 @@ public class BuyRateService {
 
     /** Bounty map keyed by card name upper-cased. */
     private Map<String, BountyCard> bounties = new HashMap<>();
+
+    /** Last-modified timestamp of the shared buy_rates.json file as seen by this instance. */
+    private long lastSharedModified = 0L;
 
     /**
      * Creates the service and loads persisted rules/bounties immediately.
@@ -123,12 +129,30 @@ public class BuyRateService {
     }
 
     /**
-     * Re-reads rules and bounties from persistent preferences.
-     * Call this when {@link #getSaveGeneration()} returns a new value.
+     * Re-reads rules and bounties. Checks the shared folder first; if a
+     * {@code buy_rates.json} exists there that is newer than the last-seen
+     * version, loads from it and back-fills local preferences.  Falls back
+     * to local preferences when no shared file is available.
      */
     public void reload() {
+        if (loadFromSharedFileIfNewer()) return;
         rules    = loadRulesFromPrefs();
         bounties = loadBountiesFromPrefs();
+    }
+
+    /**
+     * Polls the shared folder for a {@code buy_rates.json} that is newer
+     * than the last-seen version.  If found, loads it, updates local
+     * preferences, and increments {@link #saveGeneration} so that
+     * {@code TradePanel} refreshes its payout display.
+     *
+     * <p>Called by {@code TradePanel} on panel-show and before each summary
+     * refresh so cross-machine rate changes are picked up automatically.
+     */
+    public void pollSharedFolder() {
+        if (loadFromSharedFileIfNewer()) {
+            saveGeneration++;
+        }
     }
 
     /**
@@ -170,19 +194,10 @@ public class BuyRateService {
                     "Rules must include a catch-all row with Min Price = $0.00.");
         }
 
-        JSONArray arr = new JSONArray();
-        for (BuyRateRule rule : newRules) {
-            JSONObject obj = new JSONObject();
-            obj.put("thresholdMin", rule.thresholdMin.toPlainString());
-            obj.put("creditRate",   rule.creditRate.toPlainString());
-            obj.put("checkRate",    rule.checkRate.toPlainString());
-            arr.put(obj);
-        }
-        PREFS.put(RULES_KEY, arr.toString());
-
-        // Reload cache and bump generation
+        writeRulesToPrefs(newRules);
         rules = buildDescendingList(newRules);
         saveGeneration++;
+        writeToSharedFolder();
     }
 
     /**
@@ -191,18 +206,10 @@ public class BuyRateService {
      * @param newBounties bounties to persist
      */
     public void saveBounties(List<BountyCard> newBounties) {
-        JSONArray arr = new JSONArray();
-        for (BountyCard b : newBounties) {
-            JSONObject obj = new JSONObject();
-            obj.put("cardName",   b.cardName);
-            obj.put("creditRate", b.creditRate.toPlainString());
-            obj.put("checkRate",  b.checkRate.toPlainString());
-            arr.put(obj);
-        }
-        PREFS.put(BOUNTIES_KEY, arr.toString());
-
+        writeBountiesToPrefs(newBounties);
         bounties = buildBountyMap(newBounties);
         saveGeneration++;
+        writeToSharedFolder();
     }
 
     /**
@@ -264,60 +271,179 @@ public class BuyRateService {
     }
 
     // -------------------------------------------------------------------------
-    // Private helpers
+    // Private helpers — prefs
     // -------------------------------------------------------------------------
+
+    private void writeRulesToPrefs(List<BuyRateRule> ruleList) {
+        PREFS.put(RULES_KEY, buildRulesJson(ruleList).toString());
+    }
+
+    private void writeBountiesToPrefs(Collection<BountyCard> bountyList) {
+        PREFS.put(BOUNTIES_KEY, buildBountiesJson(bountyList).toString());
+    }
 
     private List<BuyRateRule> loadRulesFromPrefs() {
         String json = PREFS.get(RULES_KEY, "");
         List<BuyRateRule> list = new ArrayList<>();
-
         if (!json.isBlank()) {
             try {
-                JSONArray arr = new JSONArray(json);
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject obj = arr.getJSONObject(i);
-                    BigDecimal threshold = new BigDecimal(obj.getString("thresholdMin"));
-                    BigDecimal credit    = new BigDecimal(obj.getString("creditRate"));
-                    BigDecimal check     = new BigDecimal(obj.getString("checkRate"));
-                    list.add(new BuyRateRule(threshold, credit, check));
-                }
+                list = parseRulesJson(new JSONArray(json));
             } catch (Exception e) {
-                System.err.println("[BuyRateService] Failed to parse rules: " + e.getMessage());
-                list.clear(); // fall through to defaults below
+                System.err.println("[BuyRateService] Failed to parse rules from prefs: " + e.getMessage());
             }
         }
-
-        // Always ensure a catch-all exists
-        boolean hasCatchAll = list.stream()
-                .anyMatch(r -> r.thresholdMin.compareTo(BigDecimal.ZERO) == 0);
-        if (!hasCatchAll) {
-            list.add(new BuyRateRule(DEFAULT_THRESHOLD, DEFAULT_CREDIT, DEFAULT_CHECK));
-        }
-
+        ensureCatchAll(list);
         return buildDescendingList(list);
     }
 
     private Map<String, BountyCard> loadBountiesFromPrefs() {
         String json = PREFS.get(BOUNTIES_KEY, "");
-        List<BountyCard> list = new ArrayList<>();
+        if (json.isBlank()) return new HashMap<>();
+        try {
+            return buildBountyMap(parseBountiesJson(new JSONArray(json)));
+        } catch (Exception e) {
+            System.err.println("[BuyRateService] Failed to parse bounties from prefs: " + e.getMessage());
+            return new HashMap<>();
+        }
+    }
 
-        if (!json.isBlank()) {
+    // -------------------------------------------------------------------------
+    // Private helpers — shared folder
+    // -------------------------------------------------------------------------
+
+    /** Resolves the shared folder from the same Preferences node used by PreferencesPanel. */
+    private static File resolveSharedFolder() {
+        String path = PREFS.get(PreferencesPanel.SHARED_FOLDER_KEY, "");
+        if (path.isBlank()) return null;
+        File dir = new File(path);
+        return (dir.exists() && dir.isDirectory()) ? dir : null;
+    }
+
+    /**
+     * Writes current rules and bounties to {@code buy_rates.json} in the
+     * shared folder.  Best-effort — failures are logged but not propagated.
+     */
+    private void writeToSharedFolder() {
+        File dir = resolveSharedFolder();
+        if (dir == null) return;
+        try {
+            JSONObject root = new JSONObject();
+            root.put("rules",    buildRulesJson(rules));
+            root.put("bounties", buildBountiesJson(bounties.values()));
+            File dest = new File(dir, SHARED_FILE);
+            Files.writeString(dest.toPath(), root.toString(2));
+            lastSharedModified = dest.lastModified();
+            System.out.println("[BuyRateService] Wrote buy_rates.json to shared folder.");
+        } catch (Exception e) {
+            System.err.println("[BuyRateService] Failed to write shared buy_rates.json: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Loads rules and bounties from the shared {@code buy_rates.json} if it
+     * is newer than the last version seen by this instance.  Updates local
+     * preferences so future restarts stay in sync.
+     *
+     * @return {@code true} if new data was loaded from the shared file
+     */
+    private boolean loadFromSharedFileIfNewer() {
+        File dir = resolveSharedFolder();
+        if (dir == null) return false;
+        File sharedFile = new File(dir, SHARED_FILE);
+        if (!sharedFile.exists()) return false;
+        long fileModified = sharedFile.lastModified();
+        if (fileModified <= lastSharedModified) return false;
+
+        try {
+            JSONObject root      = new JSONObject(Files.readString(sharedFile.toPath()));
+            List<BuyRateRule> r  = parseRulesJson(root.optJSONArray("rules"));
+            List<BountyCard>  b  = parseBountiesJson(root.optJSONArray("bounties"));
+            ensureCatchAll(r);
+            this.rules    = buildDescendingList(r);
+            this.bounties = buildBountyMap(b);
+            lastSharedModified = fileModified;
+            // Mirror to local prefs so the app works offline next time
+            writeRulesToPrefs(r);
+            writeBountiesToPrefs(b);
+            System.out.println("[BuyRateService] Synced buy rates from shared folder.");
+            return true;
+        } catch (Exception e) {
+            System.err.println("[BuyRateService] Failed to read shared buy_rates.json: " + e.getMessage());
+            return false;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Private helpers — JSON
+    // -------------------------------------------------------------------------
+
+    private static JSONArray buildRulesJson(Iterable<BuyRateRule> ruleList) {
+        JSONArray arr = new JSONArray();
+        for (BuyRateRule rule : ruleList) {
+            arr.put(new JSONObject()
+                    .put("thresholdMin", rule.thresholdMin.toPlainString())
+                    .put("creditRate",   rule.creditRate.toPlainString())
+                    .put("checkRate",    rule.checkRate.toPlainString()));
+        }
+        return arr;
+    }
+
+    private static JSONArray buildBountiesJson(Iterable<BountyCard> bountyList) {
+        JSONArray arr = new JSONArray();
+        for (BountyCard b : bountyList) {
+            arr.put(new JSONObject()
+                    .put("cardName",   b.cardName)
+                    .put("creditRate", b.creditRate.toPlainString())
+                    .put("checkRate",  b.checkRate.toPlainString()));
+        }
+        return arr;
+    }
+
+    private static List<BuyRateRule> parseRulesJson(JSONArray arr) {
+        List<BuyRateRule> list = new ArrayList<>();
+        if (arr == null) return list;
+        for (int i = 0; i < arr.length(); i++) {
             try {
-                JSONArray arr = new JSONArray(json);
-                for (int i = 0; i < arr.length(); i++) {
-                    JSONObject obj = arr.getJSONObject(i);
-                    String cardName    = obj.getString("cardName");
-                    BigDecimal credit  = new BigDecimal(obj.getString("creditRate"));
-                    BigDecimal check   = new BigDecimal(obj.getString("checkRate"));
-                    list.add(new BountyCard(cardName, credit, check));
-                }
+                JSONObject obj = arr.getJSONObject(i);
+                list.add(new BuyRateRule(
+                        new BigDecimal(obj.getString("thresholdMin")),
+                        new BigDecimal(obj.getString("creditRate")),
+                        new BigDecimal(obj.getString("checkRate"))));
             } catch (Exception e) {
-                System.err.println("[BuyRateService] Failed to parse bounties: " + e.getMessage());
+                System.err.println("[BuyRateService] Skipping malformed rule at index " + i);
             }
         }
-
-        return buildBountyMap(list);
+        return list;
     }
+
+    private static List<BountyCard> parseBountiesJson(JSONArray arr) {
+        List<BountyCard> list = new ArrayList<>();
+        if (arr == null) return list;
+        for (int i = 0; i < arr.length(); i++) {
+            try {
+                JSONObject obj = arr.getJSONObject(i);
+                list.add(new BountyCard(
+                        obj.getString("cardName"),
+                        new BigDecimal(obj.getString("creditRate")),
+                        new BigDecimal(obj.getString("checkRate"))));
+            } catch (Exception e) {
+                System.err.println("[BuyRateService] Skipping malformed bounty at index " + i);
+            }
+        }
+        return list;
+    }
+
+    private void ensureCatchAll(List<BuyRateRule> list) {
+        boolean hasCatchAll = list.stream()
+                .anyMatch(r -> r.thresholdMin.compareTo(BigDecimal.ZERO) == 0);
+        if (!hasCatchAll) {
+            list.add(new BuyRateRule(DEFAULT_THRESHOLD, DEFAULT_CREDIT, DEFAULT_CHECK));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Private helpers — collections
+    // -------------------------------------------------------------------------
 
     private static List<BuyRateRule> buildDescendingList(List<BuyRateRule> src) {
         List<BuyRateRule> desc = new ArrayList<>(src);

@@ -302,9 +302,10 @@ public class TradePanel extends JPanel {
         autosaveTimer.setRepeats(true);
         autosaveTimer.start();
 
-        // Reload buy rates when this panel becomes visible (Preferences may have changed)
+        // Reload buy rates when this panel becomes visible (Preferences or shared file may have changed)
         addHierarchyListener(e -> {
             if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && isShowing()) {
+                buyRateService.pollSharedFolder(); // picks up cross-machine rate changes
                 int gen = BuyRateService.getSaveGeneration();
                 if (gen != lastKnownBuyRateGen) {
                     lastKnownBuyRateGen = gen;
@@ -328,7 +329,7 @@ public class TradePanel extends JPanel {
             checkNumberField.setText("");
         }
         if (saveExportBtn != null) {
-            saveExportBtn.setText("inventory".equals(type) ? "Export to Inventory (POS)" : "Save Trade & Export POS");
+            saveExportBtn.setText("inventory".equals(type) ? "Confirm Trade" : "Save Trade & Export POS");
         }
         refreshSummary();
     }
@@ -1937,7 +1938,8 @@ public class TradePanel extends JPanel {
     }
 
     private void refreshSummaryImpl() {
-        // Reload buy rates if Preferences changed them since the last refresh
+        // Reload buy rates if Preferences or the shared buy_rates.json changed
+        buyRateService.pollSharedFolder();
         int gen = BuyRateService.getSaveGeneration();
         if (gen != lastKnownBuyRateGen) {
             lastKnownBuyRateGen = gen;
@@ -2051,16 +2053,34 @@ public class TradePanel extends JPanel {
         }
     }
 
-    private void exportToPOS() {
+    /** Clears all trade state without prompting. Called after a successful save/export. */
+    private void clearTradeState() {
+        receivedCards.clear();
+        cardConditions.clear();
+        rowPayouts.clear();
+        tableModel.setRowCount(0);
+        clearUndoState();
+        lastSavedTxtPath = null;
+        traderNameField.setText("");
+        customerNameField.setText("");
+        driversLicenseField.setText("");
+        if (printReceiptBtn != null) printReceiptBtn.setEnabled(false);
+        if (savePdfBtn != null) savePdfBtn.setEnabled(false);
+        TradeSessionService.clearAutosave();
+        refreshSummary();
+        cardCodeField.requestFocusInWindow();
+    }
+
+    private boolean exportToPOS() {
         if (receivedCards.isEmpty()) {
             JOptionPane.showMessageDialog(getParentWindow(),
                     "No cards to export",
                     "Empty List",
                     JOptionPane.WARNING_MESSAGE);
-            return;
+            return false;
         }
 
-        if (!confirmProceedWithoutNames()) return;
+        if (!confirmProceedWithoutNames()) return false;
 
         String traderName = traderNameField.getText().trim();
         if (traderName.isEmpty()) {
@@ -2107,7 +2127,7 @@ public class TradePanel extends JPanel {
                             "MISC cards are excluded from POS import.",
                     "Nothing to Export",
                     JOptionPane.WARNING_MESSAGE);
-            return;
+            return false;
         }
 
         try {
@@ -2150,7 +2170,7 @@ public class TradePanel extends JPanel {
                                         checkPayout, valueForCheck, totalValueUsed, diff),
                                 "Invalid Partial Payment",
                                 JOptionPane.ERROR_MESSAGE);
-                        return;
+                        return false;
                     }
 
                     paymentType = "partial";
@@ -2160,7 +2180,7 @@ public class TradePanel extends JPanel {
                             "Invalid partial payment amounts. Please enter valid numbers.",
                             "Invalid Input",
                             JOptionPane.ERROR_MESSAGE);
-                    return;
+                    return false;
                 }
             } else {
                 paymentType = "credit"; // Store credit
@@ -2190,46 +2210,75 @@ public class TradePanel extends JPanel {
                     message,
                     "Export Complete",
                     JOptionPane.INFORMATION_MESSAGE);
+            return true;
         } catch (Exception e) {
             JOptionPane.showMessageDialog(getParentWindow(),
                     "Export failed: " + e.getMessage(),
                     "Error",
                     JOptionPane.ERROR_MESSAGE);
             e.printStackTrace();
+            return false;
         }
     }
 
     /**
-     * Combined action: in inventory mode delegates to {@link #addToInventory()};
-     * otherwise saves the TXT receipt via {@link #saveList()} then exports the
-     * POS CSV via {@link #exportToPOS()}.
+     * Combined action for all payment types:
+     * <ol>
+     *   <li>Shows a trade-summary confirmation dialog.</li>
+     *   <li>Inventory — exports a single CSV via {@link #addToInventory()} then clears.</li>
+     *   <li>Other — saves TXT receipt via {@link #saveList()}, exports POS CSV via
+     *       {@link #exportToPOS()}, then clears if both succeed.</li>
+     * </ol>
      */
     private void saveAndExport() {
-        if ("inventory".equals(paymentTypePanel.getPaymentType())) {
+        if (receivedCards.isEmpty()) {
+            JOptionPane.showMessageDialog(getParentWindow(),
+                    "No cards in trade.",
+                    "Empty Trade",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        String currentPayment = paymentTypePanel.getPaymentType();
+        String paymentLabel;
+        switch (currentPayment) {
+            case "inventory": paymentLabel = "Inventory (CSV only — no receipt)"; break;
+            case "check":     paymentLabel = "Check";                             break;
+            case "partial":   paymentLabel = "Partial (Split)";                   break;
+            default:          paymentLabel = "Store Credit";                      break;
+        }
+
+        int confirm = JOptionPane.showConfirmDialog(getParentWindow(),
+                String.format("Confirm trade?\n\n" +
+                              "  Cards      : %d\n" +
+                              "  Total value: $%.2f\n" +
+                              "  Payment    : %s",
+                        receivedCards.size(), getTotalValue(), paymentLabel),
+                "Confirm Trade",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE);
+        if (confirm != JOptionPane.YES_OPTION) return;
+
+        if ("inventory".equals(currentPayment)) {
             addToInventory();
             return;
         }
-        saveList();
-        exportToPOS();
+
+        if (saveList() && exportToPOS()) {
+            clearTradeState();
+        }
     }
 
-    private void saveList() {
+    private boolean saveList() {
         if (receivedCards.isEmpty()) {
             JOptionPane.showMessageDialog(getParentWindow(),
                     "No cards to save",
                     "Empty List",
                     JOptionPane.WARNING_MESSAGE);
-            return;
+            return false;
         }
 
-        // Check if this is inventory mode
-        if ("inventory".equals(paymentTypePanel.getPaymentType())) {
-            // Inventory mode - export to inventory format instead
-            addToInventory();
-            return;
-        }
-
-        if (!confirmProceedWithoutNames()) return;
+        if (!confirmProceedWithoutNames()) return false;
 
         String traderName = traderNameField.getText().trim();
         String customerName = customerNameField.getText().trim();
@@ -2297,11 +2346,13 @@ public class TradePanel extends JPanel {
                     String.format("Card list saved!\n\nFile: %s", filename),
                     "Saved",
                     JOptionPane.INFORMATION_MESSAGE);
+            return true;
         } catch (Exception e) {
             JOptionPane.showMessageDialog(getParentWindow(),
                     "Save failed: " + e.getMessage(),
                     "Error",
                     JOptionPane.ERROR_MESSAGE);
+            return false;
         }
     }
 
@@ -2358,43 +2409,28 @@ public class TradePanel extends JPanel {
      * Exports trade items directly to inventory (Item Wizard Change Qty format)
      */
     private void addToInventory() {
-        if (receivedCards.isEmpty()) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "No cards in trade to add to inventory",
-                    "Empty Trade",
-                    JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-
-        int confirm = JOptionPane.showConfirmDialog(getParentWindow(),
-                String.format("Add %d card(s) to inventory?\n\nThis will export in Item Wizard Change Qty format.",
-                        receivedCards.size()),
-                "Confirm Add to Inventory",
-                JOptionPane.YES_NO_OPTION);
-
-        if (confirm == JOptionPane.YES_OPTION) {
-            try {
-                // Get quantities from table
-                List<Integer> quantities = new ArrayList<>();
-                for (int i = 0; i < tableModel.getRowCount(); i++) {
-                    quantities.add((Integer) tableModel.getValueAt(i, 4));
-                }
-
-                String filename = exportService.exportToInventoryFormat(
-                        receivedCards, cardConditions, quantities);
-
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        String.format("Cards added to inventory!\n\nFile: %s\n\nMISC cards were excluded from export.",
-                                filename),
-                        "Inventory Updated",
-                        JOptionPane.INFORMATION_MESSAGE);
-            } catch (Exception ex) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Failed to add to inventory: " + ex.getMessage(),
-                        "Error",
-                        JOptionPane.ERROR_MESSAGE);
-                ex.printStackTrace();
+        try {
+            List<Integer> quantities = new ArrayList<>();
+            for (int i = 0; i < tableModel.getRowCount(); i++) {
+                quantities.add((Integer) tableModel.getValueAt(i, 4));
             }
+
+            String filename = exportService.exportToInventoryFormat(
+                    receivedCards, cardConditions, quantities);
+
+            JOptionPane.showMessageDialog(getParentWindow(),
+                    "Inventory CSV saved:\n" + filename,
+                    "Trade Complete",
+                    JOptionPane.INFORMATION_MESSAGE);
+
+            clearTradeState();
+
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(getParentWindow(),
+                    "Failed to export inventory: " + ex.getMessage(),
+                    "Error",
+                    JOptionPane.ERROR_MESSAGE);
+            ex.printStackTrace();
         }
     }
 
