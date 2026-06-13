@@ -60,8 +60,16 @@ New-Item -ItemType Directory -Path $TmpExtract | Out-Null
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Get-ChildItem -Path $LibDir -Filter "*.jar" | ForEach-Object {
-    # $true = overwrite existing files (needed when multiple JARs share META-INF/MANIFEST.MF)
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($_.FullName, $TmpExtract, $true)
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($_.FullName)
+    foreach ($entry in $zip.Entries) {
+        $destPath = Join-Path $TmpExtract $entry.FullName
+        $destDir  = Split-Path $destPath
+        if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir | Out-Null }
+        if ($entry.Name -ne "") {
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destPath, $true)
+        }
+    }
+    $zip.Dispose()
 }
 
 # Merge: copy extracted deps, then overlay compiled classes (so our classes win)
