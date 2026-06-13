@@ -28,6 +28,7 @@ echo "Project : $PROJECT_DIR"
 # ── Step 1: Compile ───────────────────────────────────────────────────────────
 echo ""
 echo "[1/5] Compiling sources..."
+rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # Collect all .java source files
@@ -37,7 +38,7 @@ SOURCES=$(find "$SRC_DIR" -name "*.java" | tr '\n' ' ')
 CP=$(find "$LIB_DIR" -name "*.jar" | tr '\n' ':')
 CP="${CP%:}"  # strip trailing colon
 
-javac -encoding UTF-8 -cp "$CP" -d "$OUT_DIR" $SOURCES
+javac -encoding UTF-8 --add-modules java.prefs -cp "$CP" -d "$OUT_DIR" $SOURCES
 echo "  Compiled $(find "$SRC_DIR" -name "*.java" | wc -l | tr -d ' ') source files."
 
 # ── Step 2: Copy resources (non-.java files under src/) ───────────────────────
