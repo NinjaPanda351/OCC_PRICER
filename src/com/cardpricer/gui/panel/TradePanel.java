@@ -2260,7 +2260,9 @@ public class TradePanel extends JPanel {
         if (confirm != JOptionPane.YES_OPTION) return;
 
         if ("inventory".equals(currentPayment)) {
-            addToInventory();
+            if (exportToPOS()) {
+                clearTradeState();
+            }
             return;
         }
 
@@ -2402,35 +2404,6 @@ public class TradePanel extends JPanel {
             cardCodeField.setText(code);
 
             cardCodeField.requestFocusInWindow();
-        }
-    }
-
-    /**
-     * Exports trade items directly to inventory (Item Wizard Change Qty format)
-     */
-    private void addToInventory() {
-        try {
-            List<Integer> quantities = new ArrayList<>();
-            for (int i = 0; i < tableModel.getRowCount(); i++) {
-                quantities.add((Integer) tableModel.getValueAt(i, 4));
-            }
-
-            String filename = exportService.exportToInventoryFormat(
-                    receivedCards, cardConditions, quantities);
-
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Inventory CSV saved:\n" + filename,
-                    "Trade Complete",
-                    JOptionPane.INFORMATION_MESSAGE);
-
-            clearTradeState();
-
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Failed to export inventory: " + ex.getMessage(),
-                    "Error",
-                    JOptionPane.ERROR_MESSAGE);
-            ex.printStackTrace();
         }
     }
 
