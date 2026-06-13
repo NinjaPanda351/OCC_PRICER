@@ -6,16 +6,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Resolve JDK bin dir from wherever javac lives, so jar/jpackage are always found
+# Resolve JDK bin dir — follow symlinks and verify jar.exe exists
 $JavacPath = (Get-Command javac -ErrorAction SilentlyContinue).Source
+$JdkBin = $null
 if ($JavacPath) {
-    $JdkBin  = Split-Path $JavacPath
-    $JarExe      = Join-Path $JdkBin "jar.exe"
-    $JpackageExe = Join-Path $JdkBin "jpackage.exe"
-} else {
-    $JarExe      = "jar"
-    $JpackageExe = "jpackage"
+    # Follow symlink if present
+    $target = (Get-Item $JavacPath -ErrorAction SilentlyContinue).Target
+    $resolved = if ($target) { Split-Path $target } else { Split-Path $JavacPath }
+    if (Test-Path (Join-Path $resolved "jar.exe")) { $JdkBin = $resolved }
 }
+if (-not $JdkBin -and $env:JAVA_HOME -and (Test-Path "$env:JAVA_HOME\bin\jar.exe")) {
+    $JdkBin = "$env:JAVA_HOME\bin"
+}
+if (-not $JdkBin) {
+    # Search common JDK install locations
+    $jdk = Get-ChildItem "C:\Program Files\Java" -Filter "jdk-*" -ErrorAction SilentlyContinue |
+           Sort-Object Name -Descending | Select-Object -First 1
+    if ($jdk) { $JdkBin = Join-Path $jdk.FullName "bin" }
+}
+$JarExe      = if ($JdkBin) { Join-Path $JdkBin "jar.exe" } else { "jar" }
+$JpackageExe = if ($JdkBin) { Join-Path $JdkBin "jpackage.exe" } else { "jpackage" }
 
 $ProjectDir = $PSScriptRoot
 $SrcDir     = Join-Path $ProjectDir "src"
@@ -39,7 +49,8 @@ Write-Host "Project : $ProjectDir"
 # ── Step 1: Compile ───────────────────────────────────────────────────────────
 Write-Host "`n[1/4] Compiling sources..." -ForegroundColor Yellow
 
-if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
+if (Test-Path $OutDir) { Get-ChildItem -Path $OutDir -Recurse | Remove-Item -Recurse -Force }
+else { New-Item -ItemType Directory -Path $OutDir | Out-Null }
 
 # Collect all .java files
 $sources = Get-ChildItem -Path $SrcDir -Filter "*.java" -Recurse | Select-Object -ExpandProperty FullName
@@ -47,7 +58,7 @@ $sources = Get-ChildItem -Path $SrcDir -Filter "*.java" -Recurse | Select-Object
 # Build classpath from lib/
 $cp = (Get-ChildItem -Path $LibDir -Filter "*.jar" | Select-Object -ExpandProperty FullName) -join ";"
 
-javac -encoding UTF-8 -cp $cp -d $OutDir $sources
+javac -encoding UTF-8 --add-modules java.prefs -cp "$cp" -d $OutDir $sources
 if ($LASTEXITCODE -ne 0) { throw "Compilation failed" }
 Write-Host "  Compiled $($sources.Count) source files." -ForegroundColor Green
 
