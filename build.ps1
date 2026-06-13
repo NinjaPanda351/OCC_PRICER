@@ -6,6 +6,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Resolve JDK bin dir from wherever javac lives, so jar/jpackage are always found
+$JavacPath = (Get-Command javac -ErrorAction SilentlyContinue).Source
+if ($JavacPath) {
+    $JdkBin  = Split-Path $JavacPath
+    $JarExe      = Join-Path $JdkBin "jar.exe"
+    $JpackageExe = Join-Path $JdkBin "jpackage.exe"
+} else {
+    $JarExe      = "jar"
+    $JpackageExe = "jpackage"
+}
+
 $ProjectDir = $PSScriptRoot
 $SrcDir     = Join-Path $ProjectDir "src"
 $LibDir     = Join-Path $ProjectDir "lib"
@@ -79,7 +90,7 @@ robocopy $TmpExtract $OutDir /E /NFL /NDL /NJH /NJS /NP | Out-Null
 # Build the JAR with our MANIFEST
 if (Test-Path $JarPath) { Remove-Item $JarPath -Force }
 Push-Location $OutDir
-jar cfm $JarPath $ManifestSrc .
+& $JarExe cfm $JarPath $ManifestSrc .
 Pop-Location
 if ($LASTEXITCODE -ne 0) { throw "jar command failed" }
 Write-Host "  Created: $JarPath" -ForegroundColor Green
@@ -91,7 +102,7 @@ $AppImageDir = Join-Path $DistDir $AppName
 if (Test-Path $AppImageDir) { Remove-Item $AppImageDir -Recurse -Force }
 if (-not (Test-Path $DistDir)) { New-Item -ItemType Directory -Path $DistDir | Out-Null }
 
-jpackage `
+& $JpackageExe `
     --type app-image `
     --name $AppName `
     --app-version $JpackageVersion `
