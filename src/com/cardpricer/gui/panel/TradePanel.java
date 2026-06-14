@@ -20,6 +20,7 @@ import com.cardpricer.service.TradeReceivingExportService;
 import com.cardpricer.service.TradeSessionService;
 import com.cardpricer.util.AppTheme;
 import com.cardpricer.util.CardCodeParser;
+import com.cardpricer.util.PosMoneyField;
 import com.cardpricer.util.CardConstants;
 import com.cardpricer.util.VintageUtil;
 
@@ -635,88 +636,34 @@ public class TradePanel extends JPanel {
         };
         cardTable.getColumnModel().getColumn(4).setCellEditor(qtyEditor);
 
-        // Set up Unit Price editor with validation
-        JTextField priceField = new JTextField();
-        priceField.setHorizontalAlignment(JTextField.RIGHT);
-        DefaultCellEditor priceEditor = new DefaultCellEditor(priceField) {
+        // Set up Unit Price editor with POS-style money entry
+        PosMoneyField posField = new PosMoneyField();
+        DefaultCellEditor priceEditor = new DefaultCellEditor(posField) {
             @Override
             public Component getTableCellEditorComponent(JTable table, Object value,
                                                          boolean isSelected, int row, int column) {
-                JTextField editor = (JTextField) super.getTableCellEditorComponent(
-                        table, value, isSelected, row, column);
-                // Remove $ sign for editing
-                String text = value.toString().replace("$", "").replace(",", "").trim();
-                editor.setText(text);
-                editor.selectAll();
-                return editor;
+                // Let DefaultCellEditor set the text via our DocumentFilter, then select all.
+                super.getTableCellEditorComponent(table, value, isSelected, row, column);
+                posField.selectAll();
+                return posField;
             }
 
             @Override
             public Object getCellEditorValue() {
-                String value = (String) super.getCellEditorValue();
-                value = value.replace("$", "").replace(",", "").trim();
-
-                if (value.isEmpty()) {
-                    return "$0.00";
-                }
-
-                try {
-                    // Check if user entered a decimal point
-                    if (value.contains(".")) {
-                        // User used decimal: "5.00" → $5.00
-                        BigDecimal price = new BigDecimal(value);
-                        return String.format("$%.2f", price);
-                    } else {
-                        // No decimal: interpret as cents: "500" → $5.00
-                        int cents = Integer.parseInt(value);
-                        BigDecimal price = new BigDecimal(cents).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
-                        return String.format("$%.2f", price);
-                    }
-                } catch (NumberFormatException e) {
-                    return "$0.00";
-                }
+                return String.format("$%.2f", posField.getValue());
             }
 
             @Override
             public boolean stopCellEditing() {
-                String value = (String) super.getCellEditorValue();
-                value = value.replace("$", "").replace(",", "").trim();
-
-                if (value.isEmpty()) {
+                if (posField.getValue().compareTo(BigDecimal.ZERO) < 0) {
                     JOptionPane.showMessageDialog(getParentWindow(),
-                            "Please enter a price",
+                            "Price cannot be negative",
                             "Invalid Price",
                             JOptionPane.WARNING_MESSAGE);
                     return false;
                 }
-
-                try {
-                    BigDecimal price;
-                    // Parse based on whether decimal point is present
-                    if (value.contains(".")) {
-                        price = new BigDecimal(value);
-                    } else {
-                        int cents = Integer.parseInt(value);
-                        price = new BigDecimal(cents).divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
-                    }
-
-                    if (price.compareTo(BigDecimal.ZERO) < 0) {
-                        JOptionPane.showMessageDialog(getParentWindow(),
-                                "Price cannot be negative",
-                                "Invalid Price",
-                                JOptionPane.WARNING_MESSAGE);
-                        return false;
-                    }
-                } catch (NumberFormatException e) {
-                    JOptionPane.showMessageDialog(getParentWindow(),
-                            "Please enter a valid price",
-                            "Invalid Price",
-                            JOptionPane.ERROR_MESSAGE);
-                    return false;
-                }
                 boolean result = super.stopCellEditing();
                 if (result) {
-                    // Auto-focus search bar after successful edit
                     SwingUtilities.invokeLater(() -> cardCodeField.requestFocusInWindow());
                 }
                 return result;
@@ -1138,85 +1085,88 @@ public class TradePanel extends JPanel {
         }.execute();
     }
 
-    private void promptForManualPrice(ParsedCode parsed) {
-        String priceInput = JOptionPane.showInputDialog(getParentWindow(),
-                String.format("Card %s %s not found in Scryfall.\nEnter manual price:",
-                        parsed.setCode, parsed.collectorNumber),
-                "Manual Price Entry",
-                JOptionPane.QUESTION_MESSAGE);
+    /**
+     * Shows a POS-style price entry dialog.
+     * Returns the entered price, or {@code null} if the user cancelled.
+     */
+    private BigDecimal showPriceInputDialog(String title, String message) {
+        PosMoneyField field = new PosMoneyField();
+        field.addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && field.isShowing()) {
+                SwingUtilities.invokeLater(field::requestFocusInWindow);
+            }
+        });
+        JPanel panel = new JPanel(new BorderLayout(0, 8));
+        panel.add(new JLabel("<html>" + message.replace("\n", "<br>") + "</html>"), BorderLayout.NORTH);
+        panel.add(field, BorderLayout.CENTER);
+        int result = JOptionPane.showConfirmDialog(getParentWindow(), panel,
+                title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        return result == JOptionPane.OK_OPTION ? field.getValue() : null;
+    }
 
-        if (priceInput == null || priceInput.trim().isEmpty()) {
+    private void promptForManualPrice(ParsedCode parsed) {
+        BigDecimal price = showPriceInputDialog("Manual Price Entry",
+                String.format("Card %s %s not found in Scryfall.\nEnter manual price:",
+                        parsed.setCode, parsed.collectorNumber));
+
+        if (price == null) {
             cardCodeField.setText("");
             clearPreview();
             cardCodeField.requestFocusInWindow();
             return;
         }
 
-        try {
-            priceInput = priceInput.replace("$", "").replace(",", "").trim();
-            BigDecimal price = new BigDecimal(priceInput);
-
-            if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Price must be greater than $0.00",
-                        "Invalid Price",
-                        JOptionPane.WARNING_MESSAGE);
-                cardCodeField.setText("");
-                clearPreview();
-                cardCodeField.requestFocusInWindow();
-                return;
-            }
-
-            String code = parsed.setCode + " " + parsed.collectorNumber;
-            if (!parsed.finish.isEmpty()) {
-                code += parsed.finish;
-            }
-
-            // Add to table with NM condition by default
-            tableModel.addRow(new Object[]{
-                    false,  // Checkbox unchecked by default
-                    code,
-                    "Misc Magic Card",
-                    "NM",
-                    1,      // Default qty = 1
-                    String.format("$%.2f", price), // Unit price
-                    String.format("$%.2f", price), // Total
-                    ""      // Rate placeholder
-            });
-
-            // Create a dummy TradeItem to keep receivedCards in sync
-            Card miscCard = new Card();
-            miscCard.setName("Misc Magic Card");
-            miscCard.setSetCode("MISC");
-            miscCard.setCollectorNumber("1");
-            miscCard.setRarity("common");
-            miscCard.setPrice(price.toString());
-
-            TradeItem item = new TradeItem(miscCard, false, 1);
-            receivedCards.add(item);
-            cardConditions.add("NM");
-            rowPayouts.add(null);
-
-            refreshSummary();
-
-            // Auto-highlight and scroll to the newly added row
-            int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
-            cardTable.setRowSelectionInterval(viewRow, viewRow);
-            cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
-
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-
-        } catch (NumberFormatException e) {
+        if (price.compareTo(BigDecimal.ZERO) <= 0) {
             JOptionPane.showMessageDialog(getParentWindow(),
-                    "Invalid price format. Please enter a valid number.",
+                    "Price must be greater than $0.00",
                     "Invalid Price",
-                    JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.WARNING_MESSAGE);
             cardCodeField.setText("");
             clearPreview();
             cardCodeField.requestFocusInWindow();
+            return;
         }
+
+        String code = parsed.setCode + " " + parsed.collectorNumber;
+        if (!parsed.finish.isEmpty()) {
+            code += parsed.finish;
+        }
+
+        // Add to table with NM condition by default
+        tableModel.addRow(new Object[]{
+                false,  // Checkbox unchecked by default
+                code,
+                "Misc Magic Card",
+                "NM",
+                1,      // Default qty = 1
+                String.format("$%.2f", price), // Unit price
+                String.format("$%.2f", price), // Total
+                ""      // Rate placeholder
+        });
+
+        // Create a dummy TradeItem to keep receivedCards in sync
+        Card miscCard = new Card();
+        miscCard.setName("Misc Magic Card");
+        miscCard.setSetCode("MISC");
+        miscCard.setCollectorNumber("1");
+        miscCard.setRarity("common");
+        miscCard.setPrice(price.toString());
+
+        TradeItem item = new TradeItem(miscCard, false, 1);
+        receivedCards.add(item);
+        cardConditions.add("NM");
+        rowPayouts.add(null);
+
+        refreshSummary();
+
+        // Auto-highlight and scroll to the newly added row
+        int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
+        cardTable.setRowSelectionInterval(viewRow, viewRow);
+        cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
+
+        cardCodeField.setText("");
+        clearPreview();
+        cardCodeField.requestFocusInWindow();
     }
 
     /**
@@ -1228,56 +1178,40 @@ public class TradePanel extends JPanel {
                 : "S".equals(parsed.finish) ? "surge foil"
                 : isFoil ? "foil" : "normal";
 
-        String priceInput = JOptionPane.showInputDialog(getParentWindow(),
+        BigDecimal price = showPriceInputDialog("Manual Price Entry",
                 String.format("Card '%s' has no %s price listed.\nEnter manual price:",
-                        card.getName(), finishType),
-                "Manual Price Entry",
-                JOptionPane.QUESTION_MESSAGE);
+                        card.getName(), finishType));
 
-        if (priceInput == null || priceInput.trim().isEmpty()) {
+        if (price == null) {
             cardCodeField.setText("");
             clearPreview();
             cardCodeField.requestFocusInWindow();
             return;
         }
 
-        try {
-            priceInput = priceInput.replace("$", "").replace(",", "").trim();
-            BigDecimal price = new BigDecimal(priceInput);
-
-            if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Price must be greater than $0.00",
-                        "Invalid Price",
-                        JOptionPane.WARNING_MESSAGE);
-                cardCodeField.setText("");
-                clearPreview();
-                cardCodeField.requestFocusInWindow();
-                return;
-            }
-
-            // Set the price on the card
-            if (isFoil) {
-                card.setFoilPrice(price.toString());
-            } else {
-                card.setPrice(price.toString());
-            }
-
-            // Now display and add the card
-            previewCard = card;
-            previewFinish = parsed.finish;
-            displayPreview(card, parsed.finish);
-            addCard();
-
-        } catch (NumberFormatException e) {
+        if (price.compareTo(BigDecimal.ZERO) <= 0) {
             JOptionPane.showMessageDialog(getParentWindow(),
-                    "Invalid price format. Please enter a valid number.",
+                    "Price must be greater than $0.00",
                     "Invalid Price",
-                    JOptionPane.ERROR_MESSAGE);
+                    JOptionPane.WARNING_MESSAGE);
             cardCodeField.setText("");
             clearPreview();
             cardCodeField.requestFocusInWindow();
+            return;
         }
+
+        // Set the price on the card
+        if (isFoil) {
+            card.setFoilPrice(price.toString());
+        } else {
+            card.setPrice(price.toString());
+        }
+
+        // Now display and add the card
+        previewCard = card;
+        previewFinish = parsed.finish;
+        displayPreview(card, parsed.finish);
+        addCard();
     }
 
     /**
@@ -1292,7 +1226,7 @@ public class TradePanel extends JPanel {
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
         JTextField nameField = new JTextField(30);
-        JTextField priceField = new JTextField(10);
+        PosMoneyField priceField = new PosMoneyField();
 
         // Auto-focus the name field when the dialog becomes visible
         nameField.addHierarchyListener(e -> {
@@ -1335,16 +1269,16 @@ public class TradePanel extends JPanel {
         }
 
         String cardName = nameField.getText().trim();
-        String priceInput = priceField.getText().trim();
+        BigDecimal price = priceField.getValue();
 
         if (cardName.isEmpty()) {
             cardName = "Misc Magic Card";
         }
 
-        if (priceInput.isEmpty()) {
+        if (price.compareTo(BigDecimal.ZERO) <= 0) {
             JOptionPane.showMessageDialog(getParentWindow(),
-                    "Price is required",
-                    "Missing Price",
+                    "Price must be greater than $0.00",
+                    "Invalid Price",
                     JOptionPane.WARNING_MESSAGE);
             cardCodeField.setText("");
             clearPreview();
@@ -1352,66 +1286,41 @@ public class TradePanel extends JPanel {
             return;
         }
 
-        try {
-            priceInput = priceInput.replace("$", "").replace(",", "").trim();
-            BigDecimal price = new BigDecimal(priceInput);
+        // Add to table with NM condition by default
+        tableModel.addRow(new Object[]{
+                false,  // Checkbox unchecked by default
+                "MISC",
+                cardName,
+                "NM",
+                1,      // Default qty = 1
+                String.format("$%.2f", price), // Unit price
+                String.format("$%.2f", price), // Total
+                ""      // Rate placeholder
+        });
 
-            if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                JOptionPane.showMessageDialog(getParentWindow(),
-                        "Price must be greater than $0.00",
-                        "Invalid Price",
-                        JOptionPane.WARNING_MESSAGE);
-                cardCodeField.setText("");
-                clearPreview();
-                cardCodeField.requestFocusInWindow();
-                return;
-            }
+        // Create a dummy TradeItem to keep receivedCards in sync
+        Card miscCard = new Card();
+        miscCard.setName(cardName);
+        miscCard.setSetCode("MISC");
+        miscCard.setCollectorNumber("1");
+        miscCard.setRarity("common");
+        miscCard.setPrice(price.toString());
 
-            // Add to table with NM condition by default
-            tableModel.addRow(new Object[]{
-                    false,  // Checkbox unchecked by default
-                    "MISC",
-                    cardName,
-                    "NM",
-                    1,      // Default qty = 1
-                    String.format("$%.2f", price), // Unit price
-                    String.format("$%.2f", price), // Total
-                    ""      // Rate placeholder
-            });
+        TradeItem item = new TradeItem(miscCard, false, 1);
+        receivedCards.add(item);
+        cardConditions.add("NM");
+        rowPayouts.add(null);
 
-            // Create a dummy TradeItem to keep receivedCards in sync
-            Card miscCard = new Card();
-            miscCard.setName(cardName);
-            miscCard.setSetCode("MISC");
-            miscCard.setCollectorNumber("1");
-            miscCard.setRarity("common");
-            miscCard.setPrice(price.toString());
+        refreshSummary();
 
-            TradeItem item = new TradeItem(miscCard, false, 1);
-            receivedCards.add(item);
-            cardConditions.add("NM");
-            rowPayouts.add(null);
+        // Auto-highlight and scroll to the newly added row
+        int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
+        cardTable.setRowSelectionInterval(viewRow, viewRow);
+        cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
 
-            refreshSummary();
-
-            // Auto-highlight and scroll to the newly added row
-            int viewRow = cardTable.convertRowIndexToView(tableModel.getRowCount() - 1);
-            cardTable.setRowSelectionInterval(viewRow, viewRow);
-            cardTable.scrollRectToVisible(cardTable.getCellRect(viewRow, 0, true));
-
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-
-        } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Invalid price format. Please enter a valid number.",
-                    "Invalid Price",
-                    JOptionPane.ERROR_MESSAGE);
-            cardCodeField.setText("");
-            clearPreview();
-            cardCodeField.requestFocusInWindow();
-        }
+        cardCodeField.setText("");
+        clearPreview();
+        cardCodeField.requestFocusInWindow();
     }
 
     private void displayPreview(Card card, String finish) {
@@ -1478,107 +1387,41 @@ public class TradePanel extends JPanel {
 
         // Check if price is available, if not prompt for manual entry
         if (("F".equals(previewFinish) || "S".equals(previewFinish)) && !previewCard.hasFoilPrice()) {
-            // Prompt for manual foil/surge-foil price
             String finishLabel = "S".equals(previewFinish) ? "surge foil" : "foil";
-            String priceInput = JOptionPane.showInputDialog(getParentWindow(),
+            BigDecimal price = showPriceInputDialog("Manual Price Entry",
                     String.format("Card '%s' has no %s price available.\nEnter manual price:",
-                            previewCard.getName(), finishLabel),
-                    "Manual Price Entry",
-                    JOptionPane.QUESTION_MESSAGE);
-
-            if (priceInput == null || priceInput.trim().isEmpty()) {
-                return; // User cancelled
-            }
-
-            try {
-                priceInput = priceInput.replace("$", "").replace(",", "").trim();
-                BigDecimal price = new BigDecimal(priceInput);
-
-                if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                    JOptionPane.showMessageDialog(getParentWindow(),
-                            "Price must be greater than $0.00",
-                            "Invalid Price",
-                            JOptionPane.WARNING_MESSAGE);
-                    return;
-                }
-
-                // Set the foil price
-                previewCard.setFoilPrice(price.toString());
-            } catch (NumberFormatException e) {
+                            previewCard.getName(), finishLabel));
+            if (price == null) return;
+            if (price.compareTo(BigDecimal.ZERO) <= 0) {
                 JOptionPane.showMessageDialog(getParentWindow(),
-                        "Invalid price format. Please enter a valid number.",
-                        "Invalid Price",
-                        JOptionPane.ERROR_MESSAGE);
+                        "Price must be greater than $0.00", "Invalid Price", JOptionPane.WARNING_MESSAGE);
                 return;
             }
+            previewCard.setFoilPrice(price.toString());
         } else if ("E".equals(previewFinish) && !previewCard.hasEtchedPrice()) {
-            // Prompt for manual etched price
-            String priceInput = JOptionPane.showInputDialog(getParentWindow(),
+            BigDecimal price = showPriceInputDialog("Manual Price Entry",
                     String.format("Card '%s' has no etched price available.\nEnter manual price:",
-                            previewCard.getName()),
-                    "Manual Price Entry",
-                    JOptionPane.QUESTION_MESSAGE);
-
-            if (priceInput == null || priceInput.trim().isEmpty()) {
-                return; // User cancelled
-            }
-
-            try {
-                priceInput = priceInput.replace("$", "").replace(",", "").trim();
-                BigDecimal price = new BigDecimal(priceInput);
-
-                if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                    JOptionPane.showMessageDialog(getParentWindow(),
-                            "Price must be greater than $0.00",
-                            "Invalid Price",
-                            JOptionPane.WARNING_MESSAGE);
-                    return;
-                }
-
-                // Set the etched price
-                previewCard.setEtchedPrice(price.toString());
-            } catch (NumberFormatException e) {
+                            previewCard.getName()));
+            if (price == null) return;
+            if (price.compareTo(BigDecimal.ZERO) <= 0) {
                 JOptionPane.showMessageDialog(getParentWindow(),
-                        "Invalid price format. Please enter a valid number.",
-                        "Invalid Price",
-                        JOptionPane.ERROR_MESSAGE);
+                        "Price must be greater than $0.00", "Invalid Price", JOptionPane.WARNING_MESSAGE);
                 return;
             }
+            previewCard.setEtchedPrice(price.toString());
         }
 
         if (!isFoil && !previewCard.hasNormalPrice()) {
-            // Prompt for manual normal price
-            String priceInput = JOptionPane.showInputDialog(getParentWindow(),
+            BigDecimal price = showPriceInputDialog("Manual Price Entry",
                     String.format("Card '%s' has no normal price available.\nEnter manual price:",
-                            previewCard.getName()),
-                    "Manual Price Entry",
-                    JOptionPane.QUESTION_MESSAGE);
-
-            if (priceInput == null || priceInput.trim().isEmpty()) {
-                return; // User cancelled
-            }
-
-            try {
-                priceInput = priceInput.replace("$", "").replace(",", "").trim();
-                BigDecimal price = new BigDecimal(priceInput);
-
-                if (price.compareTo(BigDecimal.ZERO) <= 0) {
-                    JOptionPane.showMessageDialog(getParentWindow(),
-                            "Price must be greater than $0.00",
-                            "Invalid Price",
-                            JOptionPane.WARNING_MESSAGE);
-                    return;
-                }
-
-                // Set the normal price
-                previewCard.setPrice(price.toString());
-            } catch (NumberFormatException e) {
+                            previewCard.getName()));
+            if (price == null) return;
+            if (price.compareTo(BigDecimal.ZERO) <= 0) {
                 JOptionPane.showMessageDialog(getParentWindow(),
-                        "Invalid price format. Please enter a valid number.",
-                        "Invalid Price",
-                        JOptionPane.ERROR_MESSAGE);
+                        "Price must be greater than $0.00", "Invalid Price", JOptionPane.WARNING_MESSAGE);
                 return;
             }
+            previewCard.setPrice(price.toString());
         }
 
         TradeItem item = new TradeItem(previewCard, isFoil, 1, previewFinish);
