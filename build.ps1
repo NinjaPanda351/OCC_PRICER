@@ -121,6 +121,7 @@ if (-not (Test-Path $DistDir)) { New-Item -ItemType Directory -Path $DistDir | O
     --main-jar $JarName `
     --main-class $MainClass `
     --dest $DistDir `
+    --icon (Join-Path $ProjectDir "assets\OCC_Icon_400x400.ico") `
     --java-options "-Xmx512m"
 
 if ($LASTEXITCODE -ne 0) { throw "jpackage failed" }
