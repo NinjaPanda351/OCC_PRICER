@@ -56,7 +56,7 @@ public class SetList {
             "NEO", "NEC",
             "KTK", "LEG", "LGN", "LRW", "ORI",
             "MOM", "MOC", "MAT",
-            "MAR", "SPM", "SPE",
+            "MAR", "MSH", "MSC", "SPM", "SPE",
             "EXP", "MPS", "MP2", "MED",
             "M25", "MMQ", "MIR", "MRD", "MBS", "MD1",
             "MH1", "MHR", "MH2", "MH3", "M3C",

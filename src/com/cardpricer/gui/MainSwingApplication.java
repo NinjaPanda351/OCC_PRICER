@@ -12,6 +12,7 @@ import com.cardpricer.util.AppTheme;
 import com.cardpricer.util.AppVersion;
 import com.formdev.flatlaf.FlatDarkLaf;
 
+import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.MatteBorder;
@@ -19,6 +20,7 @@ import java.awt.*;
 import java.awt.event.ItemEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.io.InputStream;
 import java.util.prefs.Preferences;
 
 /**
@@ -74,6 +76,9 @@ public class MainSwingApplication {
 
     private void start() {
         frame = new JFrame("OCC Card Pricer & Trading Platform");
+        try (InputStream is = MainSwingApplication.class.getResourceAsStream("/assets/OCC_Icon_400x400.png")) {
+            if (is != null) frame.setIconImage(ImageIO.read(is));
+        } catch (Exception ignored) {}
         frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         frame.addWindowListener(new WindowAdapter() {
             @Override
