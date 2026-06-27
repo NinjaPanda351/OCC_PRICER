@@ -7,7 +7,10 @@ import com.cardpricer.gui.panel.InventoryPanel;
 import com.cardpricer.gui.panel.ManagedPanel;
 import com.cardpricer.gui.panel.PreferencesPanel;
 import com.cardpricer.gui.panel.TradePanel;
+import com.cardpricer.service.ScryfallCatalogService;
+import com.cardpricer.service.TradeReceivingExportService;
 import com.cardpricer.service.UpdateCheckService;
+import java.util.List;
 import com.cardpricer.util.AppTheme;
 import com.cardpricer.util.AppVersion;
 import com.formdev.flatlaf.FlatDarkLaf;
@@ -38,6 +41,7 @@ public class MainSwingApplication {
     private JPanel contentArea;          // will hold screens
     private CardLayout cardLayout;       // screen switching
     private JLabel statusLabel;
+    private JLabel catalogChip;          // persistent catalog state indicator
 
     // Update-banner slot (NORTH of root; hidden until update found)
     private JPanel updateBannerSlot;
@@ -142,6 +146,12 @@ public class MainSwingApplication {
             updateBannerSlot.revalidate();
             updateBannerSlot.repaint();
         });
+
+        // Sync any trade files that failed to copy last session (background, best-effort)
+        TradeReceivingExportService.syncMissingToSharedFolder();
+
+        // Auto-load catalog: download if missing/stale (>3 days), otherwise load from disk
+        startCatalogAutoLoad();
     }
 
     private JComponent createSidebar() {
@@ -278,8 +288,14 @@ public class MainSwingApplication {
             themeToggleBtn.setText(isDarkTheme() ? "\u2600" : "\uD83C\uDF19");
         });
 
+        catalogChip = new JLabel("\u25CB Catalog");
+        catalogChip.setForeground(UIManager.getColor("Label.disabledForeground"));
+        catalogChip.setFont(catalogChip.getFont().deriveFont(11f));
+        catalogChip.setToolTipText("Card catalog not loaded");
+
         JPanel eastPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         eastPanel.setOpaque(false);
+        eastPanel.add(catalogChip);
         eastPanel.add(themeToggleBtn);
         eastPanel.add(version);
 
@@ -399,6 +415,77 @@ public class MainSwingApplication {
         panel.add(msg);
         panel.add(Box.createVerticalGlue());
         return panel;
+    }
+
+    /**
+     * Starts a background worker that loads or downloads the Scryfall card catalog:
+     * <ul>
+     *   <li>Already loaded — skips immediately.</li>
+     *   <li>Cache missing or older than 3 days — downloads and builds from Scryfall.</li>
+     *   <li>Cache present and fresh — loads from disk into memory.</li>
+     * </ul>
+     * Progress is reported in the status bar; the UI is never blocked.
+     */
+    private void startCatalogAutoLoad() {
+        ScryfallCatalogService catalog = ScryfallCatalogService.getInstance();
+        if (catalog.isLoaded()) return;
+
+        final long THREE_DAYS_MS = 3L * 24 * 60 * 60 * 1000;
+        final boolean needsDownload = !catalog.isCatalogAvailable()
+                || catalog.getCacheAgeMs() >= THREE_DAYS_MS;
+
+        // Amber ⟳ while working
+        catalogChip.setText("\u29D7 Catalog");
+        catalogChip.setForeground(new Color(0xD97706));
+        catalogChip.setToolTipText(needsDownload ? "Downloading card catalog…" : "Loading card catalog…");
+
+        new SwingWorker<String, String>() {
+            @Override
+            protected String doInBackground() throws Exception {
+                if (needsDownload) {
+                    publish("Downloading card catalog from Scryfall\u2026");
+                    java.util.function.BooleanSupplier cancelCheck = this::isCancelled;
+                    catalog.downloadAndBuild(new ScryfallCatalogService.DownloadProgress() {
+                        @Override
+                        public void onUpdate(int cards, String phase) {
+                            publish(cards > 0
+                                    ? "Catalog: " + phase + " (" + String.format("%,d", cards) + " cards)"
+                                    : "Catalog: " + phase);
+                        }
+                        @Override
+                        public boolean isCancelled() { return cancelCheck.getAsBoolean(); }
+                    });
+                } else {
+                    publish("Loading card catalog\u2026");
+                    catalog.loadFromDisk();
+                }
+                return "Catalog ready \u2014 " + String.format("%,d", catalog.getCardCount()) + " cards";
+            }
+
+            @Override
+            protected void process(List<String> chunks) {
+                statusLabel.setText(chunks.get(chunks.size() - 1));
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    String msg = get();
+                    statusLabel.setText(msg);
+                    // Green ● when loaded
+                    catalogChip.setText("\u25CF Catalog");
+                    catalogChip.setForeground(new Color(0x22C55E));
+                    catalogChip.setToolTipText(
+                            String.format("%,d cards loaded", catalog.getCardCount()));
+                } catch (Exception ex) {
+                    statusLabel.setText("Catalog unavailable \u2014 open Preferences to retry");
+                    // Grey ○ on failure
+                    catalogChip.setText("\u25CB Catalog");
+                    catalogChip.setForeground(UIManager.getColor("Label.disabledForeground"));
+                    catalogChip.setToolTipText("Catalog failed to load — check Preferences");
+                }
+            }
+        }.execute();
     }
 
     private void showAboutDialog() {

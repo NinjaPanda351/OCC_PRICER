@@ -971,7 +971,14 @@ public class TradePanel extends JPanel {
                 try {
                     java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
                             .lookup(parsed.setCode, parsed.collectorNumber);
-                    if (hit.isPresent()) return hit.get();
+                    if (hit.isPresent()) {
+                        Card c = hit.get();
+                        boolean isFoil = "F".equals(parsed.finish) || "E".equals(parsed.finish)
+                                      || "S".equals(parsed.finish);
+                        boolean hasPrice = isFoil ? c.hasFoilPrice() : c.hasNormalPrice();
+                        if (hasPrice) return c;
+                        // found in bulk but price is N/A — fall through to live API
+                    }
                 } catch (Exception ignored) {
                     // catalog miss or error — fall through to API
                 }
@@ -1029,7 +1036,14 @@ public class TradePanel extends JPanel {
                 try {
                     java.util.Optional<Card> hit = ScryfallCatalogService.getInstance()
                             .lookup(parsed.setCode, parsed.collectorNumber);
-                    if (hit.isPresent()) return hit.get();
+                    if (hit.isPresent()) {
+                        Card c = hit.get();
+                        boolean isFoil = "F".equals(parsed.finish) || "E".equals(parsed.finish)
+                                      || "S".equals(parsed.finish);
+                        boolean hasPrice = isFoil ? c.hasFoilPrice() : c.hasNormalPrice();
+                        if (hasPrice) return c;
+                        // found in bulk but price is N/A — fall through to live API
+                    }
                 } catch (Exception ignored) {
                     // catalog miss or error — fall through to API
                 }

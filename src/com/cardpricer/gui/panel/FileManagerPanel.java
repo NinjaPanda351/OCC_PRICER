@@ -241,27 +241,43 @@ public class FileManagerPanel extends JPanel {
             sharedStatusLabel.setText("No shared folder configured — go to Preferences → Network");
             return;
         }
-        File dir = new File(path);
-        if (!dir.exists() || !dir.isDirectory()) {
-            sharedStatusLabel.setText("Shared folder not accessible: " + path);
-            return;
-        }
-        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        File[] files = dir.listFiles(File::isFile);
-        int count = 0;
-        if (files != null) {
-            for (File f : files) {
-                sharedTableModel.addRow(new Object[]{
-                        f.getName(),
-                        getFileType(f.getName()),
-                        formatFileSize(f.length()),
-                        fmt.format(new Date(f.lastModified())),
-                        f.getAbsolutePath()
-                });
-                count++;
+        sharedStatusLabel.setText("Connecting to shared folder...");
+
+        // Run all network I/O off the EDT — File.exists()/listFiles() on a UNC path can
+        // block for 30+ seconds when the host is on a different network segment.
+        new SwingWorker<List<Object[]>, Void>() {
+            @Override
+            protected List<Object[]> doInBackground() {
+                File dir = new File(path);
+                if (!dir.exists() || !dir.isDirectory()) return null;
+                SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                File[] files = dir.listFiles(File::isFile);
+                List<Object[]> rows = new ArrayList<>();
+                if (files != null) {
+                    for (File f : files) {
+                        rows.add(new Object[]{
+                                f.getName(),
+                                getFileType(f.getName()),
+                                formatFileSize(f.length()),
+                                fmt.format(new Date(f.lastModified())),
+                                f.getAbsolutePath()
+                        });
+                    }
+                }
+                return rows;
             }
-        }
-        sharedStatusLabel.setText("Shared folder: " + path + "  (" + count + " file(s))");
+            @Override
+            protected void done() {
+                List<Object[]> rows;
+                try { rows = get(); } catch (Exception ex) { rows = null; }
+                if (rows == null) {
+                    sharedStatusLabel.setText("Shared folder not accessible: " + path);
+                    return;
+                }
+                for (Object[] row : rows) sharedTableModel.addRow(row);
+                sharedStatusLabel.setText("Shared folder: " + path + "  (" + rows.size() + " file(s))");
+            }
+        }.execute();
     }
 
     private void openSharedFile() {
