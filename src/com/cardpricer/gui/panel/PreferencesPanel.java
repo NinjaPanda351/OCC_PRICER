@@ -23,6 +23,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.prefs.Preferences;
 
 /**
@@ -279,22 +283,58 @@ public class PreferencesPanel extends JPanel {
             JOptionPane.showMessageDialog(this, "No folder path entered.", "Test", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        File dir = new File(path);
-        if (!dir.exists() || !dir.isDirectory()) {
-            JOptionPane.showMessageDialog(this, "Path does not exist or is not a folder:\n" + path,
-                    "Test Failed", JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-        // Try writing a temp file to confirm write access
-        try {
-            Path tmp = Files.createTempFile(dir.toPath(), ".occ_test_", ".tmp");
-            Files.delete(tmp);
-            JOptionPane.showMessageDialog(this, "Connection OK — folder is accessible and writable.",
-                    "Test Passed", JOptionPane.INFORMATION_MESSAGE);
-        } catch (IOException ex) {
-            JOptionPane.showMessageDialog(this, "Folder exists but is not writable:\n" + ex.getMessage(),
-                    "Test Failed", JOptionPane.ERROR_MESSAGE);
-        }
+        // Run all network I/O on a background thread — File.exists() on a UNC path can
+        // block for 30+ seconds when the host is unreachable (ethernet↔WiFi routing).
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() {
+                ExecutorService exec = Executors.newSingleThreadExecutor();
+                try {
+                    File dir = new File(path);
+                    boolean exists;
+                    try {
+                        exists = exec.submit(() -> dir.exists() && dir.isDirectory())
+                                .get(5, TimeUnit.SECONDS);
+                    } catch (TimeoutException e) {
+                        return "TIMEOUT";
+                    }
+                    if (!exists) return "NOT_FOUND";
+                    Path tmp = Files.createTempFile(dir.toPath(), ".occ_test_", ".tmp");
+                    Files.delete(tmp);
+                    return "OK";
+                } catch (IOException ex) {
+                    return "NOT_WRITABLE:" + ex.getMessage();
+                } catch (Exception ex) {
+                    return "ERROR:" + ex.getMessage();
+                } finally {
+                    exec.shutdownNow();
+                }
+            }
+            @Override
+            protected void done() {
+                String result;
+                try { result = get(); } catch (Exception ex) { result = "ERROR:" + ex.getMessage(); }
+                switch (result) {
+                    case "OK" -> JOptionPane.showMessageDialog(PreferencesPanel.this,
+                            "Connection OK — folder is accessible and writable.",
+                            "Test Passed", JOptionPane.INFORMATION_MESSAGE);
+                    case "TIMEOUT" -> JOptionPane.showMessageDialog(PreferencesPanel.this,
+                            "Connection timed out — the folder may be unreachable:\n" + path,
+                            "Test Failed", JOptionPane.ERROR_MESSAGE);
+                    case "NOT_FOUND" -> JOptionPane.showMessageDialog(PreferencesPanel.this,
+                            "Path does not exist or is not a folder:\n" + path,
+                            "Test Failed", JOptionPane.ERROR_MESSAGE);
+                    default -> {
+                        String detail = result.startsWith("NOT_WRITABLE:") ? result.substring(13)
+                                      : result.startsWith("ERROR:")         ? result.substring(6)
+                                      : result;
+                        JOptionPane.showMessageDialog(PreferencesPanel.this,
+                                "Folder exists but is not writable:\n" + detail,
+                                "Test Failed", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            }
+        }.execute();
     }
 
     /** Returns the configured shared trades folder, or null/empty if not set. */

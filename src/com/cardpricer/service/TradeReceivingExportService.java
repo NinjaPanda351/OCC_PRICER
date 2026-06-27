@@ -32,35 +32,77 @@ public class TradeReceivingExportService {
         }
     }
 
+    // Dedicated daemon thread for all shared-folder I/O so it never blocks the EDT.
+    private static final java.util.concurrent.ExecutorService SHARED_FOLDER_EXECUTOR =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "shared-folder-copy");
+                t.setDaemon(true);
+                return t;
+            });
+
     /**
-     * Returns the configured shared-trades folder path, or null if none is set / folder
-     * is not accessible.  Errors are silently swallowed — shared folder is best-effort.
+     * Copies {@code localFilePath} to the shared trades folder asynchronously.
+     * Returns immediately — the caller (EDT) is never blocked.  The copy is
+     * best-effort; all failures are logged but never propagated.
      */
-    private static java.io.File resolveSharedDirectory() {
+    private static void copyToSharedFolder(String localFilePath) {
         String path = PreferencesPanel.getSharedTradesFolder();
-        if (path == null || path.isBlank()) return null;
-        java.io.File dir = new java.io.File(path);
-        if (!dir.exists() || !dir.isDirectory()) return null;
-        return dir;
+        if (path == null || path.isBlank()) return;
+
+        SHARED_FOLDER_EXECUTOR.submit(() -> {
+            try {
+                java.io.File dir = new java.io.File(path);
+                if (!dir.exists() || !dir.isDirectory()) {
+                    System.err.println("[SharedFolder] Path not accessible: " + path);
+                    return;
+                }
+                java.io.File src  = new java.io.File(localFilePath);
+                java.io.File dest = new java.io.File(dir, src.getName());
+                java.nio.file.Files.copy(src.toPath(), dest.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                System.out.println("Copied to shared folder: " + dest.getAbsolutePath());
+            } catch (Exception e) {
+                System.err.println("[SharedFolder] Failed to copy file: " + e.getMessage());
+            }
+        });
     }
 
     /**
-     * Copies {@code localFile} to the shared trades folder (if configured and reachable).
-     * Failures are logged but never propagated.
+     * Queues a background sync of any local trade files not yet present (or smaller than
+     * the local copy) in the shared folder.  Returns immediately — safe to call on the EDT
+     * at startup.  Useful for catching files that were missed when the network was down.
      */
-    private static void copyToSharedFolder(String localFilePath) {
-        try {
-            java.io.File sharedDir = resolveSharedDirectory();
-            if (sharedDir == null) return;
+    public static void syncMissingToSharedFolder() {
+        String sharedPath = PreferencesPanel.getSharedTradesFolder();
+        if (sharedPath == null || sharedPath.isBlank()) return;
 
-            java.io.File src  = new java.io.File(localFilePath);
-            java.io.File dest = new java.io.File(sharedDir, src.getName());
-            java.nio.file.Files.copy(src.toPath(), dest.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            System.out.println("Copied to shared folder: " + dest.getAbsolutePath());
-        } catch (Exception e) {
-            System.err.println("[SharedFolder] Failed to copy file: " + e.getMessage());
-        }
+        SHARED_FOLDER_EXECUTOR.submit(() -> {
+            try {
+                java.io.File sharedDir = new java.io.File(sharedPath);
+                if (!sharedDir.exists() || !sharedDir.isDirectory()) {
+                    System.err.println("[SharedFolder] Startup sync skipped — not accessible: " + sharedPath);
+                    return;
+                }
+                java.io.File localDir = com.cardpricer.util.AppDataDirectory.trades();
+                java.io.File[] localFiles = localDir.listFiles(java.io.File::isFile);
+                if (localFiles == null || localFiles.length == 0) return;
+
+                int synced = 0;
+                for (java.io.File src : localFiles) {
+                    java.io.File dest = new java.io.File(sharedDir, src.getName());
+                    if (!dest.exists() || dest.length() < src.length()) {
+                        java.nio.file.Files.copy(src.toPath(), dest.toPath(),
+                                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                        synced++;
+                    }
+                }
+                if (synced > 0) {
+                    System.out.println("[SharedFolder] Startup sync: copied " + synced + " missing file(s).");
+                }
+            } catch (Exception e) {
+                System.err.println("[SharedFolder] Startup sync failed: " + e.getMessage());
+            }
+        });
     }
 
     /**
