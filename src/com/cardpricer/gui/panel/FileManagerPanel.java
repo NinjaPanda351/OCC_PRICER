@@ -397,41 +397,52 @@ public class FileManagerPanel extends JPanel {
 
     private void refreshFileList() {
         tableModel.setRowCount(0);
+        statusLabel.setText("Loading files…");
+        final String selectedCategory = (String) categoryCombo.getSelectedItem();
 
-        String selectedCategory = (String) categoryCombo.getSelectedItem();
-        List<File> files = new ArrayList<>();
-
-        // Collect files based on category
-        if ("All Files".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.tradesPath()));
-            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.pricesPath()));
-            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.combinedFilesPath()));
-            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.inventoryPath()));
-        } else if ("Trades".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.tradesPath()));
-        } else if ("Set Pricer".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.pricesPath()));
-        } else if ("Inventory".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.inventoryPath()));
-        } else if ("Combined Files".equals(selectedCategory)) {
-            files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.combinedFilesPath()));
-        }
-
-        // Populate table
-        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        for (File file : files) {
-            if (file.isFile()) {
-                String filename = file.getName();
-                String type = getFileType(filename);
-                String size = formatFileSize(file.length());
-                String dateModified = dateFormat.format(new Date(file.lastModified()));
-                String path = file.getAbsolutePath();
-
-                tableModel.addRow(new Object[]{filename, type, size, dateModified, path});
+        new SwingWorker<List<Object[]>, Void>() {
+            @Override
+            protected List<Object[]> doInBackground() {
+                List<File> files = new ArrayList<>();
+                if ("All Files".equals(selectedCategory)) {
+                    files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.tradesPath()));
+                    files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.pricesPath()));
+                    files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.combinedFilesPath()));
+                    files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.inventoryPath()));
+                } else if ("Trades".equals(selectedCategory)) {
+                    files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.tradesPath()));
+                } else if ("Set Pricer".equals(selectedCategory)) {
+                    files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.pricesPath()));
+                } else if ("Inventory".equals(selectedCategory)) {
+                    files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.inventoryPath()));
+                } else if ("Combined Files".equals(selectedCategory)) {
+                    files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.combinedFilesPath()));
+                }
+                SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                List<Object[]> rows = new ArrayList<>();
+                for (File file : files) {
+                    if (file.isFile()) {
+                        rows.add(new Object[]{
+                                file.getName(), getFileType(file.getName()),
+                                formatFileSize(file.length()),
+                                dateFormat.format(new Date(file.lastModified())),
+                                file.getAbsolutePath()
+                        });
+                    }
+                }
+                return rows;
             }
-        }
-
-        statusLabel.setText(String.format("Found %d file(s)", files.size()));
+            @Override
+            protected void done() {
+                try {
+                    List<Object[]> rows = get();
+                    for (Object[] row : rows) tableModel.addRow(row);
+                    statusLabel.setText(String.format("Found %d file(s)", rows.size()));
+                } catch (Exception ex) {
+                    statusLabel.setText("Failed to load files");
+                }
+            }
+        }.execute();
     }
 
     private List<File> getFilesFromDirectory(String dirPath) {
@@ -616,10 +627,23 @@ public class FileManagerPanel extends JPanel {
     }
 
     private void refreshHistoryList() {
-        allRecords = TradeHistoryService.loadAll(com.cardpricer.util.AppDataDirectory.tradesPath());
-        contentCache.clear(); // F11: invalidate content cache when records reload
         historyTableModel.setRowCount(0);
-        applyHistoryFilter();
+        new SwingWorker<List<com.cardpricer.model.TradeRecord>, Void>() {
+            @Override
+            protected List<com.cardpricer.model.TradeRecord> doInBackground() {
+                return TradeHistoryService.loadAll(com.cardpricer.util.AppDataDirectory.tradesPath());
+            }
+            @Override
+            protected void done() {
+                try {
+                    allRecords = get();
+                    contentCache.clear();
+                    applyHistoryFilter();
+                } catch (Exception ex) {
+                    // leave table empty on failure
+                }
+            }
+        }.execute();
     }
 
     private void applyHistoryFilter() {
