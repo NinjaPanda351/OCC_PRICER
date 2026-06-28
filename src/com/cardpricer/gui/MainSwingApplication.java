@@ -430,35 +430,25 @@ public class MainSwingApplication {
         ScryfallCatalogService catalog = ScryfallCatalogService.getInstance();
         if (catalog.isLoaded()) return;
 
-        final long THREE_DAYS_MS = 3L * 24 * 60 * 60 * 1000;
-        final boolean needsDownload = !catalog.isCatalogAvailable()
-                || catalog.getCacheAgeMs() >= THREE_DAYS_MS;
+        if (!catalog.isCatalogAvailable()) {
+            // No local cache at all — nudge user to download via Preferences
+            catalogChip.setText("\u25CB Catalog");
+            catalogChip.setForeground(UIManager.getColor("Label.disabledForeground"));
+            catalogChip.setToolTipText("No catalog — download via Preferences → Catalog");
+            statusLabel.setText("Catalog not downloaded — go to Preferences to download");
+            return;
+        }
 
-        // Amber ⟳ while working
+        // Amber ⟳ while loading from disk
         catalogChip.setText("\u29D7 Catalog");
         catalogChip.setForeground(new Color(0xD97706));
-        catalogChip.setToolTipText(needsDownload ? "Downloading card catalog…" : "Loading card catalog…");
+        catalogChip.setToolTipText("Loading card catalog from disk…");
 
         new SwingWorker<String, String>() {
             @Override
             protected String doInBackground() throws Exception {
-                if (needsDownload) {
-                    publish("Downloading card catalog from Scryfall\u2026");
-                    java.util.function.BooleanSupplier cancelCheck = this::isCancelled;
-                    catalog.downloadAndBuild(new ScryfallCatalogService.DownloadProgress() {
-                        @Override
-                        public void onUpdate(int cards, String phase) {
-                            publish(cards > 0
-                                    ? "Catalog: " + phase + " (" + String.format("%,d", cards) + " cards)"
-                                    : "Catalog: " + phase);
-                        }
-                        @Override
-                        public boolean isCancelled() { return cancelCheck.getAsBoolean(); }
-                    });
-                } else {
-                    publish("Loading card catalog\u2026");
-                    catalog.loadFromDisk();
-                }
+                publish("Loading card catalog\u2026");
+                catalog.loadFromDisk();
                 return "Catalog ready \u2014 " + String.format("%,d", catalog.getCardCount()) + " cards";
             }
 
@@ -470,19 +460,19 @@ public class MainSwingApplication {
             @Override
             protected void done() {
                 try {
-                    String msg = get();
-                    statusLabel.setText(msg);
-                    // Green ● when loaded
+                    statusLabel.setText(get());
                     catalogChip.setText("\u25CF Catalog");
                     catalogChip.setForeground(new Color(0x22C55E));
+                    long ageMs  = catalog.getCacheAgeMs();
+                    long ageDays = ageMs / 86_400_000L;
+                    String ageStr = ageDays > 0 ? ageDays + "d old" : "fresh";
                     catalogChip.setToolTipText(
-                            String.format("%,d cards loaded", catalog.getCardCount()));
+                            String.format("%,d cards  (%s)", catalog.getCardCount(), ageStr));
                 } catch (Exception ex) {
-                    statusLabel.setText("Catalog unavailable \u2014 open Preferences to retry");
-                    // Grey ○ on failure
+                    statusLabel.setText("Catalog failed to load \u2014 open Preferences to retry");
                     catalogChip.setText("\u25CB Catalog");
                     catalogChip.setForeground(UIManager.getColor("Label.disabledForeground"));
-                    catalogChip.setToolTipText("Catalog failed to load — check Preferences");
+                    catalogChip.setToolTipText("Catalog failed — check Preferences");
                 }
             }
         }.execute();
