@@ -6,7 +6,7 @@ import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.math.BigDecimal;
-import java.math.RoundingMode; // used by updatePartialCheck / updatePartialCredit
+import java.math.RoundingMode;
 
 /**
  * Self-contained payment-method selector (store credit, check, inventory, partial).
@@ -26,9 +26,14 @@ public class PaymentTypePanel extends JPanel {
     private final JTextField partialCreditField;
     private final JTextField partialCheckField;
     private final JPanel partialPaymentPanel;
+    private JLabel partialTotalLabel;
 
-    /** Current trade total, updated via setTotal(). */
-    private BigDecimal currentTotal = BigDecimal.ZERO;
+    /** Current trade total (market value), updated via setTotal(). */
+    private BigDecimal currentTotal      = BigDecimal.ZERO;
+    /** Tiered credit payout total (includes bounty rates), updated via setTotal(). */
+    private BigDecimal currentCreditSeed = BigDecimal.ZERO;
+    /** Tiered check payout total (includes bounty rates), updated via setTotal(). */
+    private BigDecimal currentCheckSeed  = BigDecimal.ZERO;
 
     private final Runnable onSelectionChanged;
 
@@ -136,8 +141,12 @@ public class PaymentTypePanel extends JPanel {
      * @param checkSeed  tiered check payout suggestion, or {@code null}
      */
     public void setTotal(BigDecimal total, BigDecimal creditSeed, BigDecimal checkSeed) {
-        this.currentTotal = total;
-        // creditSeed / checkSeed retained for API compatibility but not used to auto-fill fields
+        this.currentTotal      = total;
+        this.currentCreditSeed = creditSeed != null ? creditSeed : BigDecimal.ZERO;
+        this.currentCheckSeed  = checkSeed  != null ? checkSeed  : BigDecimal.ZERO;
+        if (partialRadio.isSelected()) {
+            updatePartialSplit();
+        }
     }
 
     /**
@@ -197,9 +206,9 @@ public class PaymentTypePanel extends JPanel {
         });
         panel.add(partialCheckField);
 
-        JLabel equalsLabel = new JLabel("  =  $0.00");
-        equalsLabel.setFont(equalsLabel.getFont().deriveFont(Font.BOLD));
-        panel.add(equalsLabel);
+        partialTotalLabel = new JLabel("  =  $0.00");
+        partialTotalLabel.setFont(partialTotalLabel.getFont().deriveFont(Font.BOLD));
+        panel.add(partialTotalLabel);
 
         return panel;
     }
@@ -211,7 +220,7 @@ public class PaymentTypePanel extends JPanel {
     }
 
     private void updatePartialCheck() {
-        // User typed in credit payout — calculate corresponding check payout
+        // User typed credit — back-calculate check using effective rates from seeds
         try {
             String creditText = partialCreditField.getText().trim();
             if (creditText.isEmpty()) {
@@ -219,15 +228,18 @@ public class PaymentTypePanel extends JPanel {
                 updatePartialTotal();
                 return;
             }
+            if (currentTotal.compareTo(BigDecimal.ZERO) == 0) return;
 
-            BigDecimal creditPayout = new BigDecimal(creditText.replace(",", ""));
-            // Credit is 50% of card value → value = credit / 0.50
-            BigDecimal valueUsedForCredit = creditPayout.divide(new BigDecimal("0.50"), 2, RoundingMode.HALF_UP);
-            BigDecimal remainingValue = currentTotal.subtract(valueUsedForCredit);
+            BigDecimal creditRate = currentCreditSeed.divide(currentTotal, 10, RoundingMode.HALF_UP);
+            BigDecimal checkRate  = currentCheckSeed.divide(currentTotal, 10, RoundingMode.HALF_UP);
+            if (creditRate.compareTo(BigDecimal.ZERO) == 0) return;
+
+            BigDecimal creditPayout       = new BigDecimal(creditText.replace(",", ""));
+            BigDecimal valueUsedForCredit = creditPayout.divide(creditRate, 2, RoundingMode.HALF_UP);
+            BigDecimal remainingValue     = currentTotal.subtract(valueUsedForCredit);
             if (remainingValue.compareTo(BigDecimal.ZERO) < 0) remainingValue = BigDecimal.ZERO;
 
-            // Check payout is 1/3 of remaining value
-            BigDecimal checkPayout = remainingValue.divide(new BigDecimal("3"), 2, RoundingMode.HALF_UP);
+            BigDecimal checkPayout = remainingValue.multiply(checkRate).setScale(2, RoundingMode.HALF_UP);
             partialCheckField.setText(String.format("%.2f", checkPayout));
             updatePartialTotal();
         } catch (Exception e) {
@@ -236,7 +248,7 @@ public class PaymentTypePanel extends JPanel {
     }
 
     private void updatePartialCredit() {
-        // User typed in check payout — calculate corresponding credit payout
+        // User typed check — back-calculate credit using effective rates from seeds
         try {
             String checkText = partialCheckField.getText().trim();
             if (checkText.isEmpty()) {
@@ -244,15 +256,18 @@ public class PaymentTypePanel extends JPanel {
                 updatePartialTotal();
                 return;
             }
+            if (currentTotal.compareTo(BigDecimal.ZERO) == 0) return;
 
-            BigDecimal checkPayout = new BigDecimal(checkText.replace(",", ""));
-            // Check is 1/3 of card value → value = check * 3
-            BigDecimal valueUsedForCheck = checkPayout.multiply(new BigDecimal("3"));
-            BigDecimal remainingValue = currentTotal.subtract(valueUsedForCheck);
+            BigDecimal creditRate = currentCreditSeed.divide(currentTotal, 10, RoundingMode.HALF_UP);
+            BigDecimal checkRate  = currentCheckSeed.divide(currentTotal, 10, RoundingMode.HALF_UP);
+            if (checkRate.compareTo(BigDecimal.ZERO) == 0) return;
+
+            BigDecimal checkPayout       = new BigDecimal(checkText.replace(",", ""));
+            BigDecimal valueUsedForCheck = checkPayout.divide(checkRate, 2, RoundingMode.HALF_UP);
+            BigDecimal remainingValue    = currentTotal.subtract(valueUsedForCheck);
             if (remainingValue.compareTo(BigDecimal.ZERO) < 0) remainingValue = BigDecimal.ZERO;
 
-            // Credit payout is 50% of remaining value
-            BigDecimal creditPayout = remainingValue.multiply(new BigDecimal("0.50")).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal creditPayout = remainingValue.multiply(creditRate).setScale(2, RoundingMode.HALF_UP);
             partialCreditField.setText(String.format("%.2f", creditPayout));
             updatePartialTotal();
         } catch (Exception e) {
@@ -268,26 +283,8 @@ public class PaymentTypePanel extends JPanel {
             BigDecimal creditPayout = creditText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(creditText.replace(",", ""));
             BigDecimal checkPayout  = checkText.isEmpty()  ? BigDecimal.ZERO : new BigDecimal(checkText.replace(",", ""));
 
-            // Value consumed: credit uses value/0.5, check uses value*3
-            BigDecimal valueForCredit = creditPayout.divide(new BigDecimal("0.50"), 2, RoundingMode.HALF_UP);
-            BigDecimal valueForCheck  = checkPayout.multiply(new BigDecimal("3"));
-            BigDecimal totalValueUsed = valueForCredit.add(valueForCheck);
-
-            // Find the equals label and update it
-            for (Component comp : partialPaymentPanel.getComponents()) {
-                if (comp instanceof JLabel) {
-                    JLabel label = (JLabel) comp;
-                    if (label.getText().startsWith("  =  ")) {
-                        label.setText(String.format("  =  $%.2f value used", totalValueUsed));
-
-                        BigDecimal diff = totalValueUsed.subtract(currentTotal).abs();
-                        label.setForeground(diff.compareTo(new BigDecimal("0.10")) <= 0
-                                ? new Color(0, 150, 0)
-                                : Color.RED);
-                        break;
-                    }
-                }
-            }
+            partialTotalLabel.setText(String.format("  =  $%.2f total", creditPayout.add(checkPayout)));
+            partialTotalLabel.setForeground(new Color(0, 150, 0));
         } catch (Exception e) {
             // Ignore parse errors
         }
