@@ -421,7 +421,7 @@ public class MainSwingApplication {
      * Starts a background worker that loads or downloads the Scryfall card catalog:
      * <ul>
      *   <li>Already loaded — skips immediately.</li>
-     *   <li>Cache missing or older than 3 days — downloads and builds from Scryfall.</li>
+     *   <li>Cache missing or older than 2 days — downloads and builds from Scryfall.</li>
      *   <li>Cache present and fresh — loads from disk into memory.</li>
      * </ul>
      * Progress is reported in the status bar; the UI is never blocked.
@@ -439,43 +439,83 @@ public class MainSwingApplication {
             return;
         }
 
-        // Amber ⟳ while loading from disk
+        boolean stale = catalog.getCacheAgeMs() > 2 * 86_400_000L;
+
+        // Amber ⟳ while downloading or loading
         catalogChip.setText("\u29D7 Catalog");
         catalogChip.setForeground(new Color(0xD97706));
-        catalogChip.setToolTipText("Loading card catalog from disk…");
 
-        new SwingWorker<String, String>() {
-            @Override
-            protected String doInBackground() throws Exception {
-                publish("Loading card catalog\u2026");
-                catalog.loadFromDisk();
-                return "Catalog ready \u2014 " + String.format("%,d", catalog.getCardCount()) + " cards";
-            }
+        if (stale) {
+            catalogChip.setToolTipText("Downloading fresh catalog\u2026");
+            statusLabel.setText("Catalog is over 2 days old \u2014 downloading update\u2026");
 
-            @Override
-            protected void process(List<String> chunks) {
-                statusLabel.setText(chunks.get(chunks.size() - 1));
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    statusLabel.setText(get());
-                    catalogChip.setText("\u25CF Catalog");
-                    catalogChip.setForeground(new Color(0x22C55E));
-                    long ageMs  = catalog.getCacheAgeMs();
-                    long ageDays = ageMs / 86_400_000L;
-                    String ageStr = ageDays > 0 ? ageDays + "d old" : "fresh";
-                    catalogChip.setToolTipText(
-                            String.format("%,d cards  (%s)", catalog.getCardCount(), ageStr));
-                } catch (Exception ex) {
-                    statusLabel.setText("Catalog failed to load \u2014 open Preferences to retry");
-                    catalogChip.setText("\u25CB Catalog");
-                    catalogChip.setForeground(UIManager.getColor("Label.disabledForeground"));
-                    catalogChip.setToolTipText("Catalog failed — check Preferences");
+            new SwingWorker<String, String>() {
+                @Override
+                protected String doInBackground() throws Exception {
+                    catalog.downloadAndBuild(new ScryfallCatalogService.DownloadProgress() {
+                        @Override public boolean isCancelled() { return false; }
+                        @Override public void onUpdate(int count, String phase) { publish(phase); }
+                    });
+                    return "Catalog updated \u2014 " + String.format("%,d", catalog.getCardCount()) + " cards";
                 }
-            }
-        }.execute();
+
+                @Override
+                protected void process(List<String> chunks) {
+                    statusLabel.setText(chunks.get(chunks.size() - 1));
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        statusLabel.setText(get());
+                        catalogChip.setText("\u25CF Catalog");
+                        catalogChip.setForeground(new Color(0x22C55E));
+                        catalogChip.setToolTipText(
+                                String.format("%,d cards  (fresh)", catalog.getCardCount()));
+                    } catch (Exception ex) {
+                        statusLabel.setText("Catalog download failed \u2014 open Preferences to retry");
+                        catalogChip.setText("\u25CB Catalog");
+                        catalogChip.setForeground(UIManager.getColor("Label.disabledForeground"));
+                        catalogChip.setToolTipText("Catalog failed — check Preferences");
+                    }
+                }
+            }.execute();
+        } else {
+            catalogChip.setToolTipText("Loading card catalog from disk\u2026");
+
+            new SwingWorker<String, String>() {
+                @Override
+                protected String doInBackground() throws Exception {
+                    publish("Loading card catalog\u2026");
+                    catalog.loadFromDisk();
+                    return "Catalog ready \u2014 " + String.format("%,d", catalog.getCardCount()) + " cards";
+                }
+
+                @Override
+                protected void process(List<String> chunks) {
+                    statusLabel.setText(chunks.get(chunks.size() - 1));
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        statusLabel.setText(get());
+                        catalogChip.setText("\u25CF Catalog");
+                        catalogChip.setForeground(new Color(0x22C55E));
+                        long ageMs   = catalog.getCacheAgeMs();
+                        long ageDays = ageMs / 86_400_000L;
+                        String ageStr = ageDays > 0 ? ageDays + "d old" : "fresh";
+                        catalogChip.setToolTipText(
+                                String.format("%,d cards  (%s)", catalog.getCardCount(), ageStr));
+                    } catch (Exception ex) {
+                        statusLabel.setText("Catalog failed to load \u2014 open Preferences to retry");
+                        catalogChip.setText("\u25CB Catalog");
+                        catalogChip.setForeground(UIManager.getColor("Label.disabledForeground"));
+                        catalogChip.setToolTipText("Catalog failed — check Preferences");
+                    }
+                }
+            }.execute();
+        }
     }
 
     private void showAboutDialog() {
