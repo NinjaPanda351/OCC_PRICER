@@ -2010,7 +2010,7 @@ public class TradePanel extends JPanel {
                     BigDecimal valueForCheck  = checkPayout.multiply(new BigDecimal("3"));
                     BigDecimal totalValueUsed = valueForCredit.add(valueForCheck);
 
-                    BigDecimal totalCardValue = calculateTotalValue(nonMiscCards);
+                    BigDecimal totalCardValue = getTotalValue();
 
                     // Allow small rounding differences (within $0.10)
                     BigDecimal diff = totalValueUsed.subtract(totalCardValue).abs();
