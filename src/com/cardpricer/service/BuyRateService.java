@@ -3,6 +3,7 @@ package com.cardpricer.service;
 import com.cardpricer.gui.panel.PreferencesPanel;
 import com.cardpricer.model.BountyCard;
 import com.cardpricer.model.BuyRateRule;
+import com.cardpricer.util.AppDataDirectory;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -25,8 +26,9 @@ import java.util.prefs.Preferences;
  * Owns persistence, defaults, and rate lookup for tiered buy rates and
  * bounty card overrides.
  *
- * <p>Uses the same {@link java.util.prefs.Preferences} node as
- * {@link PreferencesPanel} so all settings live under one node.
+ * <p>Rules and bounties are persisted to a local JSON file in the application
+ * config directory ({@code buy_rates_local.json}) with no size restrictions.
+ * The shared-folder path setting is still stored in {@link java.util.prefs.Preferences}.
  *
  * <h3>Lookup algorithm ({@link #computePayout})</h3>
  * <ol>
@@ -41,9 +43,8 @@ import java.util.prefs.Preferences;
  */
 public class BuyRateService {
 
-    private static final String RULES_KEY       = "buy.rate.rules";
-    private static final String BOUNTIES_KEY    = "buy.rate.bounties";
-    private static final String SHARED_FILE     = "buy_rates.json";
+    private static final String LOCAL_CONFIG_FILE = "buy_rates_local.json";
+    private static final String SHARED_FILE       = "buy_rates.json";
 
     private static final BigDecimal DEFAULT_CREDIT    = new BigDecimal("0.50");
     private static final BigDecimal DEFAULT_CHECK     = new BigDecimal("0.3333");
@@ -136,8 +137,8 @@ public class BuyRateService {
      */
     public void reload() {
         if (loadFromSharedFileIfNewer()) return;
-        rules    = loadRulesFromPrefs();
-        bounties = loadBountiesFromPrefs();
+        rules    = loadRulesFromLocalFile();
+        bounties = loadBountiesFromLocalFile();
     }
 
     /**
@@ -194,8 +195,8 @@ public class BuyRateService {
                     "Rules must include a catch-all row with Min Price = $0.00.");
         }
 
-        writeRulesToPrefs(newRules);
         rules = buildDescendingList(newRules);
+        writeLocalFile(newRules, bounties.values());
         saveGeneration++;
         writeToSharedFolder();
     }
@@ -206,8 +207,8 @@ public class BuyRateService {
      * @param newBounties bounties to persist
      */
     public void saveBounties(List<BountyCard> newBounties) {
-        writeBountiesToPrefs(newBounties);
         bounties = buildBountyMap(newBounties);
+        writeLocalFile(rules, newBounties);
         saveGeneration++;
         writeToSharedFolder();
     }
@@ -271,38 +272,48 @@ public class BuyRateService {
     }
 
     // -------------------------------------------------------------------------
-    // Private helpers — prefs
+    // Private helpers — local config file
     // -------------------------------------------------------------------------
 
-    private void writeRulesToPrefs(List<BuyRateRule> ruleList) {
-        PREFS.put(RULES_KEY, buildRulesJson(ruleList).toString());
+    private static File localConfigFile() {
+        return new File(AppDataDirectory.config(), LOCAL_CONFIG_FILE);
     }
 
-    private void writeBountiesToPrefs(Collection<BountyCard> bountyList) {
-        PREFS.put(BOUNTIES_KEY, buildBountiesJson(bountyList).toString());
+    /** Writes rules and bounties together to the local JSON config file. */
+    private void writeLocalFile(Iterable<BuyRateRule> ruleList, Iterable<BountyCard> bountyList) {
+        try {
+            JSONObject root = new JSONObject();
+            root.put("rules",    buildRulesJson(ruleList));
+            root.put("bounties", buildBountiesJson(bountyList));
+            Files.writeString(localConfigFile().toPath(), root.toString(2));
+        } catch (Exception e) {
+            System.err.println("[BuyRateService] Failed to write " + LOCAL_CONFIG_FILE + ": " + e.getMessage());
+        }
     }
 
-    private List<BuyRateRule> loadRulesFromPrefs() {
-        String json = PREFS.get(RULES_KEY, "");
+    private List<BuyRateRule> loadRulesFromLocalFile() {
         List<BuyRateRule> list = new ArrayList<>();
-        if (!json.isBlank()) {
+        File f = localConfigFile();
+        if (f.exists()) {
             try {
-                list = parseRulesJson(new JSONArray(json));
+                JSONObject root = new JSONObject(Files.readString(f.toPath()));
+                list = parseRulesJson(root.optJSONArray("rules"));
             } catch (Exception e) {
-                System.err.println("[BuyRateService] Failed to parse rules from prefs: " + e.getMessage());
+                System.err.println("[BuyRateService] Failed to parse rules from local file: " + e.getMessage());
             }
         }
         ensureCatchAll(list);
         return buildDescendingList(list);
     }
 
-    private Map<String, BountyCard> loadBountiesFromPrefs() {
-        String json = PREFS.get(BOUNTIES_KEY, "");
-        if (json.isBlank()) return new HashMap<>();
+    private Map<String, BountyCard> loadBountiesFromLocalFile() {
+        File f = localConfigFile();
+        if (!f.exists()) return new HashMap<>();
         try {
-            return buildBountyMap(parseBountiesJson(new JSONArray(json)));
+            JSONObject root = new JSONObject(Files.readString(f.toPath()));
+            return buildBountyMap(parseBountiesJson(root.optJSONArray("bounties")));
         } catch (Exception e) {
-            System.err.println("[BuyRateService] Failed to parse bounties from prefs: " + e.getMessage());
+            System.err.println("[BuyRateService] Failed to parse bounties from local file: " + e.getMessage());
             return new HashMap<>();
         }
     }
@@ -341,8 +352,8 @@ public class BuyRateService {
 
     /**
      * Loads rules and bounties from the shared {@code buy_rates.json} if it
-     * is newer than the last version seen by this instance.  Updates local
-     * preferences so future restarts stay in sync.
+     * is newer than the last version seen by this instance.  Mirrors the data
+     * to the local config file so future restarts stay in sync.
      *
      * @return {@code true} if new data was loaded from the shared file
      */
@@ -362,9 +373,8 @@ public class BuyRateService {
             this.rules    = buildDescendingList(r);
             this.bounties = buildBountyMap(b);
             lastSharedModified = fileModified;
-            // Mirror to local prefs so the app works offline next time
-            writeRulesToPrefs(r);
-            writeBountiesToPrefs(b);
+            // Mirror to local config file so the app works offline next time
+            writeLocalFile(r, b);
             System.out.println("[BuyRateService] Synced buy rates from shared folder.");
             return true;
         } catch (Exception e) {

@@ -39,6 +39,8 @@ public class AppDataDirectory {
     public static File combinedFiles() { return subdir("combined_files"); }
     /** Returns the {@code cache} subdirectory, creating it if absent. */
     public static File cache()         { return subdir("cache"); }
+    /** Returns the {@code config} subdirectory, creating it if absent. */
+    public static File config()        { return subdir("config"); }
 
     /** Returns the absolute path string for the {@code trades} sub-folder. */
     public static String tradesPath()        { return trades().getAbsolutePath(); }

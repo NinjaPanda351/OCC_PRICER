@@ -5,7 +5,6 @@ import com.cardpricer.util.AppDataDirectory;
 import com.cardpricer.util.VintageUtil;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import org.json.JSONTokener;
 
 import java.io.*;
 import java.io.PushbackInputStream;
@@ -222,7 +221,10 @@ public class ScryfallCatalogService {
         }
 
         JSONObject bulkMeta   = fetchBulkDataMeta();
-        String     downloadUrl = bulkMeta.getString("download_uri");
+        // Prefer the new JSONL field; fall back to the legacy array field if absent
+        String     downloadUrl = bulkMeta.has("jsonl_download_uri")
+                ? bulkMeta.getString("jsonl_download_uri")
+                : bulkMeta.getString("download_uri");
 
         if (progress != null) {
             if (progress.isCancelled()) return;
@@ -247,47 +249,41 @@ public class ScryfallCatalogService {
                  PrintWriter       cacheWriter = new PrintWriter(
                          new OutputStreamWriter(gzOut, StandardCharsets.UTF_8))) {
 
-                // The Scryfall bulk file is one giant JSON array: [{card}, {card}, …]
-                // Stream it token-by-token so we never load the whole thing into memory.
-                JSONTokener tokener = new JSONTokener(reader);
-
-                char open = tokener.nextClean();
-                if (open != '[') {
-                    throw new IOException("Expected '[' at start of bulk data, got: '" + open + "'");
-                }
-
-                int     cardsProcessed = 0;
-                boolean done           = false;
-
-                while (!done) {
+                // Scryfall bulk file is now JSONL: one JSON object per line, no wrapping array.
+                // Defensive fallback: strip old array-format artefacts (leading '[', trailing ']',
+                // trailing commas) in case Scryfall ever reverts or the stream is from a local copy.
+                int    cardsProcessed = 0;
+                String rawLine;
+                while ((rawLine = reader.readLine()) != null) {
                     if (progress != null && progress.isCancelled()) {
                         tmpFile.delete();
                         throw new InterruptedException("Catalog download cancelled by user");
                     }
 
-                    char c = tokener.nextClean();
-                    switch (c) {
-                        case ']' -> done = true;
-                        case ',' -> { /* separator between objects */ }
-                        case '{' -> {
-                            tokener.back();
-                            JSONObject cardJson = new JSONObject(tokener);
+                    String line = rawLine.trim();
+                    // Skip blank lines and bare array brackets from old format
+                    if (line.isEmpty() || line.equals("[") || line.equals("]")) continue;
+                    // Strip defensive old-format wrappers
+                    if (line.startsWith("[")) line = line.substring(1).trim();
+                    if (line.endsWith("]"))   line = line.substring(0, line.length() - 1).trim();
+                    if (line.endsWith(","))   line = line.substring(0, line.length() - 1).trim();
+                    if (line.isEmpty() || !line.startsWith("{")) continue;
 
-                            // Index English, non-digital printings only
-                            if ("en".equals(cardJson.optString("lang"))
-                                    && !cardJson.optBoolean("digital", false)) {
-                                processCardJson(cardJson, newIndex, cacheWriter);
-                                cardsProcessed++;
+                    try {
+                        JSONObject cardJson = new JSONObject(line);
 
-                                if (cardsProcessed % 5_000 == 0 && progress != null) {
-                                    progress.onUpdate(cardsProcessed, "Parsing cards\u2026");
-                                }
+                        // Index English, non-digital printings only
+                        if ("en".equals(cardJson.optString("lang"))
+                                && !cardJson.optBoolean("digital", false)) {
+                            processCardJson(cardJson, newIndex, cacheWriter);
+                            cardsProcessed++;
+
+                            if (cardsProcessed % 5_000 == 0 && progress != null) {
+                                progress.onUpdate(cardsProcessed, "Parsing cards\u2026");
                             }
                         }
-                        default -> {
-                            // Unexpected character; treat end-of-stream as end of array
-                            if (!tokener.more()) done = true;
-                        }
+                    } catch (Exception ignored) {
+                        // Skip individual malformed lines without aborting the whole build
                     }
                 }
 
