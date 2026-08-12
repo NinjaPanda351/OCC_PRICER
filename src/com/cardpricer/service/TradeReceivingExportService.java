@@ -161,10 +161,6 @@ public class TradeReceivingExportService {
                 StringBuilder descBuilder = new StringBuilder();
                 descBuilder.append(card.getName());
 
-                if (card.getFrameEffectDisplay() != null) {
-                    descBuilder.append(" - ").append(card.getFrameEffects());
-                }
-
                 if (item.isFoil()) {
                     descBuilder.append(" (Foil)");
                 }
@@ -313,9 +309,6 @@ public class TradeReceivingExportService {
 
                 StringBuilder nameBuilder = new StringBuilder();
                 nameBuilder.append(card.getName());
-                if (card.getFrameEffectDisplay() != null) {
-                    nameBuilder.append(" - ").append(card.getFrameEffects());
-                }
                 if (item.isFoil()) {
                     nameBuilder.append(" (").append(item.getFinish()).append(")");
                 }

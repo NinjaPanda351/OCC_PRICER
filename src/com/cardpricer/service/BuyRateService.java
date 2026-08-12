@@ -47,7 +47,7 @@ public class BuyRateService {
     private static final String SHARED_FILE       = "buy_rates.json";
 
     private static final BigDecimal DEFAULT_CREDIT    = new BigDecimal("0.50");
-    private static final BigDecimal DEFAULT_CHECK     = new BigDecimal("0.3333");
+    private static final BigDecimal DEFAULT_CHECK     = new BigDecimal("0.40");
     private static final BigDecimal DEFAULT_THRESHOLD = BigDecimal.ZERO;
 
     private static final Preferences PREFS =
