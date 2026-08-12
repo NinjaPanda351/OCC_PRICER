@@ -212,7 +212,7 @@ public class MainSwingApplication {
 
         JButton btnPrefs = createActionButton("\u2699\uFE0F  Preferences", () -> showScreen("preferences", "Preferences"));
         JButton btnAbout = createActionButton("\u2139\uFE0F  About", this::showAboutDialog);
-        JButton btnHelp  = createActionButton("\uD83D\uDCE7  Help! Jayden", () -> HelpDialog.show(frame));
+        JButton btnHelp  = createActionButton("\uD83D\uDCE7  Report Bug", () -> HelpDialog.show(frame));
 
         sidebar.add(btnPrefs);
         sidebar.add(Box.createVerticalStrut(6));

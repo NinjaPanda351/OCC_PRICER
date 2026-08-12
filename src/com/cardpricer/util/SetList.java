@@ -44,7 +44,7 @@ public class SetList {
             "FUT",
             "GNT", "GN2", "GN3", "GTC", "GS1", "GPT",
             "GRN", "GK1",
-            "HML", "HOU", "ICE", "IMA",
+            "HOB", "HOC", "HML", "HOU", "ICE", "IMA",
             "IKO",
             "ISD",
             "MID", "MIC",

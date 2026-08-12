@@ -7,8 +7,8 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 
 /**
- * Modal dialog that lets users compose a bug report or feature request
- * and send it directly to Jayden without opening an external email client.
+ * Modal dialog that lets users submit a bug report or feature request
+ * to the development team without opening an external email client.
  */
 public final class HelpDialog extends JDialog {
 
@@ -22,7 +22,7 @@ public final class HelpDialog extends JDialog {
     }
 
     private HelpDialog(Window parent) {
-        super(parent, "Help! Jayden", ModalityType.APPLICATION_MODAL);
+        super(parent, "Report Bug", ModalityType.APPLICATION_MODAL);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setResizable(false);
 
@@ -30,10 +30,10 @@ public final class HelpDialog extends JDialog {
         content.setBorder(new EmptyBorder(18, 18, 18, 18));
 
         // Header
-        JLabel header = new JLabel("Send a message to Jayden");
+        JLabel header = new JLabel("Submit a Bug Report");
         header.setFont(header.getFont().deriveFont(Font.BOLD, 14f));
 
-        JLabel sub = new JLabel("Report a bug or request a feature — sent directly to Jayden's inbox.");
+        JLabel sub = new JLabel("Describe the issue or feature request and it will be sent to the development team.");
         sub.setFont(sub.getFont().deriveFont(11f));
         sub.setForeground(UIManager.getColor("Label.disabledForeground"));
 
@@ -135,7 +135,7 @@ public final class HelpDialog extends JDialog {
                 try {
                     get(); // rethrow any exception
                     JOptionPane.showMessageDialog(HelpDialog.this,
-                            "Message sent! Jayden will get back to you soon.",
+                            "Report submitted. You will be contacted if additional information is needed.",
                             "Sent", JOptionPane.INFORMATION_MESSAGE);
                     dispose();
                 } catch (Exception ex) {

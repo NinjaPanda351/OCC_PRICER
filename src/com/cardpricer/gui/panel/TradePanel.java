@@ -13,7 +13,6 @@ import com.cardpricer.model.ParsedCode;
 import com.cardpricer.model.TradeItem;
 import com.cardpricer.service.BuyRateService;
 import com.cardpricer.service.PricingService;
-import com.cardpricer.service.ReceiptPrintService;
 import com.cardpricer.service.ScryfallApiService;
 import com.cardpricer.service.ScryfallCatalogService;
 import com.cardpricer.service.TradeReceivingExportService;
@@ -140,11 +139,7 @@ public class TradePanel extends JPanel {
     /** Lazy-initialized hover image popup. */
     private CardImagePopup imagePopup;
 
-    // ── Feature: Print / PDF ─────────────────────────────────────────────────
-    /** Full path to the last .txt file saved by saveList() — enables Print/PDF buttons. */
     private String lastSavedTxtPath = null;
-    private JButton printReceiptBtn;
-    private JButton savePdfBtn;
     private JButton saveExportBtn;
 
     // ── Feature: Autosave ─────────────────────────────────────────────────────
@@ -543,11 +538,22 @@ public class TradePanel extends JPanel {
             public void mouseExited(MouseEvent e) { getImagePopup().hide(); }
         });
 
-        // Enable table sorting but disable auto-sort (maintain chronological order by default)
+        // Enable table sorting with 3-state cycle: asc → desc → insertion order
         javax.swing.table.TableRowSorter<DefaultTableModel> sorter =
-                new javax.swing.table.TableRowSorter<>(tableModel);
+                new javax.swing.table.TableRowSorter<>(tableModel) {
+            @Override
+            public void toggleSortOrder(int column) {
+                java.util.List<? extends javax.swing.RowSorter.SortKey> keys = getSortKeys();
+                if (!keys.isEmpty()
+                        && keys.get(0).getColumn() == column
+                        && keys.get(0).getSortOrder() == javax.swing.SortOrder.DESCENDING) {
+                    setSortKeys(null); // third click → back to insertion order
+                } else {
+                    super.toggleSortOrder(column); // first click asc, second click desc
+                }
+            }
+        };
         cardTable.setRowSorter(sorter);
-        // Don't trigger any initial sort - maintains insertion order
 
         // Natural sort for Code column (col 1): "TDM 2" before "TDM 11"
         sorter.setComparator(1, NATURAL_SORT_COMPARATOR);
@@ -859,17 +865,12 @@ public class TradePanel extends JPanel {
         JButton vintageBtn   = AppTheme.secondaryButton("Vintage Sets (F4)");
         JButton pasteListBtn = AppTheme.secondaryButton("Paste List (Ctrl+L)");
 
-        // ── Row 2: Save & Export | Print Receipt | Save as PDF ───────────────
+        // ── Row 2: Save & Export ─────────────────────────────────────────────
         saveExportBtn = AppTheme.primaryButton("Save Trade & Export POS");
-        printReceiptBtn = AppTheme.secondaryButton("Print Receipt");
-        savePdfBtn      = AppTheme.secondaryButton("Save as PDF");
-        printReceiptBtn.setEnabled(false);
-        savePdfBtn.setEnabled(false);
 
         // Apply consistent sizing
         for (JButton btn : new JButton[]{
-                searchBtn, clearBtn, undoBtn, vintageBtn, pasteListBtn,
-                printReceiptBtn, savePdfBtn}) {
+                searchBtn, clearBtn, undoBtn, vintageBtn, pasteListBtn}) {
             btn.setPreferredSize(new Dimension(165, 36));
         }
         saveExportBtn.setPreferredSize(new Dimension(210, 36));
@@ -880,8 +881,6 @@ public class TradePanel extends JPanel {
         undoBtn.addActionListener(e -> undoLastCard());
         pasteListBtn.addActionListener(e -> showPasteImportDialog());
         saveExportBtn.addActionListener(e -> saveAndExport());
-        printReceiptBtn.addActionListener(e -> doPrintReceipt());
-        savePdfBtn.addActionListener(e -> doSaveAsPdf());
 
         JPanel row1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         row1.add(searchBtn);
@@ -892,8 +891,6 @@ public class TradePanel extends JPanel {
 
         JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         row2.add(saveExportBtn);
-        row2.add(printReceiptBtn);
-        row2.add(savePdfBtn);
 
         JPanel buttonArea = new JPanel();
         buttonArea.setLayout(new BoxLayout(buttonArea, BoxLayout.Y_AXIS));
@@ -1344,10 +1341,6 @@ public class TradePanel extends JPanel {
         StringBuilder text = new StringBuilder();
         text.append("✓ ").append(card.getName());
 
-        if (card.getFrameEffectDisplay() != null) {
-            text.append(" - ").append(card.getFrameEffectDisplay());
-        }
-
         BigDecimal price;
         String finishName;
 
@@ -1461,9 +1454,6 @@ public class TradePanel extends JPanel {
         }
 
         StringBuilder name = new StringBuilder(card.getName());
-        if (card.getFrameEffectDisplay() != null) {
-            name.append(" - ").append(card.getFrameEffectDisplay());
-        }
         if (isFoil) {
             String finishLabel = "E".equals(previewFinish) ? "Etched"
                     : "S".equals(previewFinish) ? "Surge Foil" : "Foil";
@@ -1564,9 +1554,6 @@ public class TradePanel extends JPanel {
         }
 
         StringBuilder name = new StringBuilder(card.getName());
-        if (card.getFrameEffectDisplay() != null) {
-            name.append(" - ").append(card.getFrameEffectDisplay());
-        }
         if (isFoil) {
             String finishLabel = "E".equals(finishType) ? "Etched"
                     : "S".equals(finishType) ? "Surge Foil" : "Foil";
@@ -1901,9 +1888,6 @@ public class TradePanel extends JPanel {
             rowPayouts.clear();
             tableModel.setRowCount(0);
             clearUndoState();
-            lastSavedTxtPath = null;
-            if (printReceiptBtn != null) printReceiptBtn.setEnabled(false);
-            if (savePdfBtn != null) savePdfBtn.setEnabled(false);
             TradeSessionService.clearAutosave();
             refreshSummary();
             cardCodeField.requestFocusInWindow();
@@ -1917,12 +1901,10 @@ public class TradePanel extends JPanel {
         rowPayouts.clear();
         tableModel.setRowCount(0);
         clearUndoState();
-        lastSavedTxtPath = null;
         traderNameField.setText("");
         customerNameField.setText("");
         driversLicenseField.setText("");
-        if (printReceiptBtn != null) printReceiptBtn.setEnabled(false);
-        if (savePdfBtn != null) savePdfBtn.setEnabled(false);
+        checkNumberField.setText("");
         TradeSessionService.clearAutosave();
         refreshSummary();
         cardCodeField.requestFocusInWindow();
@@ -2194,11 +2176,7 @@ public class TradePanel extends JPanel {
                     lastTierCheckTotal
             );
 
-            // Remember path so Print/PDF buttons can read it
             lastSavedTxtPath = filename;
-            if (printReceiptBtn != null) printReceiptBtn.setEnabled(true);
-            if (savePdfBtn != null) savePdfBtn.setEnabled(true);
-
             TradeSessionService.clearAutosave();
 
             JOptionPane.showMessageDialog(getParentWindow(),
@@ -2436,35 +2414,6 @@ public class TradePanel extends JPanel {
             imagePopup = new CardImagePopup(SwingUtilities.getWindowAncestor(this));
         }
         return imagePopup;
-    }
-
-    // -------------------------------------------------------------------------
-    // Feature: Print Receipt / Save as PDF
-    // -------------------------------------------------------------------------
-
-    private void doPrintReceipt() {
-        if (lastSavedTxtPath == null) return;
-        try {
-            String content = Files.readString(Path.of(lastSavedTxtPath));
-            ReceiptPrintService.printReceipt(this, content);
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Could not read receipt file: " + e.getMessage(),
-                    "Error", JOptionPane.ERROR_MESSAGE);
-        }
-    }
-
-    private void doSaveAsPdf() {
-        if (lastSavedTxtPath == null) return;
-        try {
-            String content = Files.readString(Path.of(lastSavedTxtPath));
-            String pdfPath = lastSavedTxtPath.replace(".txt", ".pdf");
-            ReceiptPrintService.saveAsPdf(this, content, pdfPath);
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(getParentWindow(),
-                    "Could not read receipt file: " + e.getMessage(),
-                    "Error", JOptionPane.ERROR_MESSAGE);
-        }
     }
 
     // -------------------------------------------------------------------------

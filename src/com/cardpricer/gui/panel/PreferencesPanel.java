@@ -374,7 +374,7 @@ public class PreferencesPanel extends JPanel {
         JPanel rulesBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
 
         JButton addRowBtn = new JButton("Add Row");
-        addRowBtn.addActionListener(e -> rulesTableModel.addRow(new String[]{"0.00", "50", "33.33"}));
+        addRowBtn.addActionListener(e -> rulesTableModel.addRow(new String[]{"0.00", "50", "40"}));
 
         JButton removeRowBtn = AppTheme.dangerButton("Remove Selected");
         removeRowBtn.addActionListener(e -> {
@@ -572,8 +572,8 @@ public class PreferencesPanel extends JPanel {
     /** Opens a dialog to add a single bounty card entry. */
     private void showAddBountyDialog() {
         JTextField nameField   = new JTextField(20);
-        JTextField creditField = new JTextField("60", 6);
-        JTextField checkField  = new JTextField("40", 6);
+        JTextField creditField = new JTextField("75", 6);
+        JTextField checkField  = new JTextField("50", 6);
 
         JPanel dialogPanel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
