@@ -1982,29 +1982,39 @@ public class TradePanel extends JPanel {
                 paymentType = "check";
                 paymentDisplay = "Check (33.33%)";
             } else if ("partial".equals(currentPayment)) {
-                // Validate partial payment - check that card value is fully used
+                // Validate partial payment using actual tiered rates (supports bounty cards)
                 try {
                     BigDecimal creditPayout = paymentTypePanel.getPartialCreditPayout();
                     BigDecimal checkPayout  = paymentTypePanel.getPartialCheckPayout();
-
-                    // Calculate card value used
-                    BigDecimal valueForCredit = creditPayout.divide(new BigDecimal("0.50"), 2, RoundingMode.HALF_UP);
-                    BigDecimal valueForCheck  = checkPayout.multiply(new BigDecimal("3"));
-                    BigDecimal totalValueUsed = valueForCredit.add(valueForCheck);
-
                     BigDecimal totalCardValue = getTotalValue();
 
-                    // Allow small rounding differences (within $0.10)
+                    // Back-calculate value allocated to each payment type using the actual
+                    // effective rates (lastTierCreditTotal / totalCardValue), not hardcoded rates.
+                    // This correctly handles bounty cards with non-standard rates.
+                    BigDecimal valueForCredit = BigDecimal.ZERO;
+                    BigDecimal valueForCheck  = BigDecimal.ZERO;
+                    if (lastTierCreditTotal.compareTo(BigDecimal.ZERO) > 0) {
+                        valueForCredit = creditPayout
+                                .multiply(totalCardValue)
+                                .divide(lastTierCreditTotal, 2, RoundingMode.HALF_UP);
+                    }
+                    if (lastTierCheckTotal.compareTo(BigDecimal.ZERO) > 0) {
+                        valueForCheck = checkPayout
+                                .multiply(totalCardValue)
+                                .divide(lastTierCheckTotal, 2, RoundingMode.HALF_UP);
+                    }
+                    BigDecimal totalValueUsed = valueForCredit.add(valueForCheck);
+
+                    // Allow rounding differences up to $1.00 (payout fields are 2dp, large trades drift)
                     BigDecimal diff = totalValueUsed.subtract(totalCardValue).abs();
-                    if (diff.compareTo(new BigDecimal("0.10")) > 0) {
+                    if (diff.compareTo(BigDecimal.ONE) > 0) {
                         JOptionPane.showMessageDialog(getParentWindow(),
                                 String.format("Partial payment doesn't match trade value!\n\n" +
                                                 "Card Value: $%.2f\n" +
-                                                "Credit Payout: $%.2f (uses $%.2f value @ 50%%)\n" +
-                                                "Check Payout: $%.2f (uses $%.2f value @ 33%%)\n" +
-                                                "Total Value Used: $%.2f\n\n" +
-                                                "Difference: $%.2f\n\n" +
-                                                "Please adjust the amounts.",
+                                                "Credit Payout: $%.2f (covers $%.2f card value)\n" +
+                                                "Check Payout: $%.2f (covers $%.2f card value)\n" +
+                                                "Total Value Covered: $%.2f\n\n" +
+                                                "Difference: $%.2f — please adjust the amounts.",
                                         totalCardValue, creditPayout, valueForCredit,
                                         checkPayout, valueForCheck, totalValueUsed, diff),
                                 "Invalid Partial Payment",
