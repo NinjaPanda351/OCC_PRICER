@@ -1,3 +1,19 @@
+v5.0.0
+- Added Copy file path to Local Files, Shared Files, and History; multiple selected file paths copy on separate lines.
+- Trade removal supports multiple highlighted rows, including sorted lists; checkboxes remain supported.
+- Increased Set Pricer's combined-file split limit to 1,000,000 cards per file.
+- Bounty CSV imports restore commas from legacy semicolon names; new exports use CSV quoting to preserve punctuation.
+- Homepage price check clears the entry on Enter and keeps the last card's prices visible while the next card is entered.
+- Set Pricer discovers new sets from Scryfall daily, excludes promo/token/Art Series/Front Cards sets, preserves custom POS codes, and caches the list for offline use. Added Refresh sets and name/code filtering.
+- Added adaptive navigation, responsive cards/forms, compact trade totals, scrollable settings, readable table widths and restored window placement.
+- Kept trade entry/save accessible while resizing and added layout regression coverage.
+- Added OCC Midnight dark theme, sidebar navigation, actionable overview, and refreshed trade, inventory, file and preferences screens.
+- Improved field spacing, table readability, payout selection and compact-window entry scrolling.
+- Unified settlement and receiving costs; strict split validation and correct CSV fields.
+- Typed trade rows, full draft recovery, local SQLite approval and retryable output jobs.
+- Preserved printing/finish identities, revisioned rates, shared-copy conflict handling.
+- Isolated Maven/package builds and regression checks. See audit/IMPLEMENTATION_STATUS.md for release gates.
+
 v1.0.0
 - Initial Release
 v1.1.0
