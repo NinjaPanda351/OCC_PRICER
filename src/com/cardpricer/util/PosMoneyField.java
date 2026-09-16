@@ -51,12 +51,12 @@ public class PosMoneyField extends JTextField {
         inDecimalMode = false;
         if (val != null && val.compareTo(BigDecimal.ZERO) != 0) {
             inDecimalMode = true;
-            String formatted = String.format("%.2f", val);
+            String formatted = String.format(java.util.Locale.ROOT, "%.2f", val);
             String[] parts = formatted.split("\\.", 2);
             intPart.append(parts[0]);
             if (parts.length > 1) decPart.append(parts[1]);
         }
-        super.setText(inDecimalMode ? String.format("%.2f", val) : "");
+        super.setText(inDecimalMode ? String.format(java.util.Locale.ROOT, "%.2f", val) : "");
         settingValue = false;
     }
 
@@ -149,7 +149,7 @@ public class PosMoneyField extends JTextField {
                 display = "";
             } else {
                 long cents = Long.parseLong(intPart.toString());
-                display = String.format("%.2f", cents / 100.0);
+                display = String.format(java.util.Locale.ROOT, "%.2f", cents / 100.0);
             }
             super.replace(fb, 0, fb.getDocument().getLength(), display, null);
         }

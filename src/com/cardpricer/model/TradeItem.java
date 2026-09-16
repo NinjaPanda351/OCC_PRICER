@@ -7,6 +7,17 @@ import java.math.BigDecimal;
  * Similar to OrderItem but specifically for trades
  */
 public class TradeItem {
+    private java.util.UUID lineId = java.util.UUID.randomUUID();
+    private BigDecimal manualPrice;
+    private String manualCondition;
+    public BigDecimal getManualPrice() { return manualPrice; }
+    public String getManualCondition() { return manualCondition; }
+    public void setManualOverride(String condition,BigDecimal price) {
+        if (price!=null && price.signum()<0) throw new IllegalArgumentException("Manual price must be non-negative");
+        manualCondition=condition;manualPrice=price;
+    }
+    public java.util.UUID getLineId() { return lineId; }
+    public void setLineId(java.util.UUID id) { lineId = java.util.Objects.requireNonNull(id); }
     private Card myCard;
     private boolean myIsFoil;
     /** Raw finish code: "F" (foil), "E" (etched), "S" (surge foil), or "" (normal). */
@@ -41,9 +52,9 @@ public class TradeItem {
             throw new IllegalArgumentException("Quantity must be at least 1");
         }
 
-        this.myCard = theCard;
-        this.myIsFoil = isFoil;
-        this.myFinishType = finishType != null ? finishType : "";
+        this.myCard = theCard.copy();
+        this.myFinishType = Finish.fromCode(finishType == null ? "" : finishType).code();
+        this.myIsFoil = !this.myFinishType.isEmpty();
         this.myQuantity = theQuantity;
 
         // Set unit price based on finish type
@@ -123,7 +134,7 @@ public class TradeItem {
     public String getSetCollectorCode() {
         return myCard.getSetCode() + " " +
                 myCard.getCollectorNumber() +
-                (myIsFoil ? "F" : "");
+                myFinishType;
     }
 
     /**

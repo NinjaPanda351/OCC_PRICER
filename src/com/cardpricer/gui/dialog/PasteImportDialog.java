@@ -49,7 +49,7 @@ public class PasteImportDialog extends JDialog {
      */
     public record FetchedResult(ParsedCode parsed, Card card, String errorMsg) {
         /** Returns {@code true} if the fetch succeeded. */
-        public boolean ok() { return card != null; }
+        public boolean ok() { return card != null && errorMsg == null; }
     }
 
     // ── Moxfield/ManaBox line pattern ─────────────────────────────────────────
@@ -419,7 +419,7 @@ public class PasteImportDialog extends JDialog {
         }
         progressBar.setValue(0);
 
-        new SwingWorker<List<FetchedResult>, FetchedResult>() {
+        activeImport = new SwingWorker<List<FetchedResult>, FetchedResult>() {
 
             @Override
             protected List<FetchedResult> doInBackground() throws Exception {
@@ -436,7 +436,7 @@ public class PasteImportDialog extends JDialog {
                     java.util.Optional<Card> hit =
                             catalog.lookup(parsed.setCode, parsed.collectorNumber);
                     if (hit.isPresent()) {
-                        FetchedResult r = new FetchedResult(parsed, hit.get(), null);
+                        FetchedResult r = new FetchedResult(parsed, hit.get(), hasPrice(hit.get(),parsed.finish) ? null : "No price for selected finish");
                         allResults.add(r);
                         publish(r);
                         lastWasApiCall = false;
@@ -445,7 +445,7 @@ public class PasteImportDialog extends JDialog {
                         try {
                             Card card = apiService.fetchCard(
                                     parsed.setCode, parsed.collectorNumber);
-                            FetchedResult r = new FetchedResult(parsed, card, null);
+                            FetchedResult r = new FetchedResult(parsed, card, hasPrice(card,parsed.finish) ? null : "No price for selected finish");
                             allResults.add(r);
                             publish(r);
                         } catch (Exception e) {
@@ -461,6 +461,7 @@ public class PasteImportDialog extends JDialog {
 
             @Override
             protected void process(List<FetchedResult> chunks) {
+                if (isCancelled() || !isDisplayable()) return;
                 for (FetchedResult result : chunks) {
                     String label;
                     if (result.ok()) {
@@ -487,6 +488,7 @@ public class PasteImportDialog extends JDialog {
 
             @Override
             protected void done() {
+                if (isCancelled() || !isDisplayable()) return;
                 try {
                     List<FetchedResult> allResults = get();
                     long ok = allResults.stream().filter(FetchedResult::ok).count();
@@ -504,10 +506,18 @@ public class PasteImportDialog extends JDialog {
                 closeButton.setEnabled(true);
             }
 
-        }.execute();
+        };
+        com.cardpricer.service.TaskCoordinator.execute(activeImport);
     }
 
+    private SwingWorker<List<FetchedResult>, FetchedResult> activeImport;
+    @Override public void dispose() { if (activeImport!=null) activeImport.cancel(true); super.dispose(); }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static boolean hasPrice(Card card,String finish) {
+        return switch (finish) { case "E" -> card.hasEtchedPrice(); case "F","S" -> card.hasFoilPrice(); default -> card.hasNormalPrice(); };
+    }
 
     private static BigDecimal getDisplayPrice(FetchedResult r) {
         Card card = r.card();

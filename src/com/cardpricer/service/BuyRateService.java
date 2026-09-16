@@ -1,6 +1,6 @@
 package com.cardpricer.service;
 
-import com.cardpricer.gui.panel.PreferencesPanel;
+
 import com.cardpricer.model.BountyCard;
 import com.cardpricer.model.BuyRateRule;
 import com.cardpricer.util.AppDataDirectory;
@@ -34,12 +34,12 @@ import java.util.prefs.Preferences;
  * <ol>
  *   <li>Check the bounty map by card name — bounty always wins if found.</li>
  *   <li>Walk rules sorted descending by threshold; first match wins.</li>
- *   <li>If no rules loaded (corruption guard), use hardcoded defaults (50% / 33.33%).</li>
+ *   <li>If no rules loaded (corruption guard), use hardcoded defaults (50% / 40%).</li>
  * </ol>
  *
  * <h3>Reload / generation counter</h3>
- * {@link TradePanel} polls {@link #getSaveGeneration()} on focus gain and
- * calls {@link #reload()} when the generation changes.
+ * Trade views consume published in-memory snapshots; open preference editors retain
+ * their revision until an explicit reload, so stale saves cannot erase another writer.
  */
 public class BuyRateService {
 
@@ -50,8 +50,7 @@ public class BuyRateService {
     private static final BigDecimal DEFAULT_CHECK     = new BigDecimal("0.40");
     private static final BigDecimal DEFAULT_THRESHOLD = BigDecimal.ZERO;
 
-    private static final Preferences PREFS =
-            Preferences.userNodeForPackage(PreferencesPanel.class);
+    private static Preferences preferences() { return Preferences.userRoot().node("/com/cardpricer/gui/panel"); }
 
     /** Monotonically increasing counter; incremented each time rules or bounties are saved. */
     private static volatile int saveGeneration = 0;
@@ -62,14 +61,44 @@ public class BuyRateService {
     /** Bounty map keyed by card name upper-cased. */
     private Map<String, BountyCard> bounties = new HashMap<>();
 
-    /** Last-modified timestamp of the shared buy_rates.json file as seen by this instance. */
-    private long lastSharedModified = 0L;
-
     /**
      * Creates the service and loads persisted rules/bounties immediately.
      */
+    private final RateConfigurationRepository repository;
+    private static final java.util.concurrent.ConcurrentMap<java.nio.file.Path,String> PUBLISHED=new java.util.concurrent.ConcurrentHashMap<>();
+    public synchronized void refreshFromPublished() {
+        String encoded=PUBLISHED.get(repository.path());
+        if (encoded==null) return;
+        JSONObject data=new JSONObject(encoded);
+        if (data.optString("revision").equals(revision)) return;
+        rules=buildDescendingList(parseRulesJson(data.getJSONArray("rules")));
+        bounties=buildBountyMap(parseBountiesJson(data.optJSONArray("bounties")));
+        revision=data.optString("revision");
+    }
+    private final boolean sharedEnabled;
+    private String revision="";
+    public synchronized String getRevision() { return revision.isEmpty() ? "defaults-50-40-v1" : revision; }
+    private volatile String syncStatus="saved locally";
+    public String getSyncStatus() { return syncStatus; }
     public BuyRateService() {
+        sharedEnabled=true;
+        repository=new RateConfigurationRepository(localConfigFile().toPath());
+        try {
+            if (repository.read().isEmpty()) {
+                String oldRules=preferences().get("buy.rate.rules", "");
+                if (!oldRules.isBlank()) {
+                    JSONObject legacy=new JSONObject().put("rules",new JSONArray(oldRules))
+                            .put("bounties",new JSONArray(preferences().get("buy.rate.bounties","[]")));
+                    RateConfigurationRepository.validate(legacy); repository.save("",legacy);
+                }
+            }
+        } catch (IOException e) { throw new java.io.UncheckedIOException("Legacy rates could not be migrated",e); }
         reload();
+        TaskCoordinator.submit(this::pollSharedFolder);
+    }
+    public BuyRateService(java.nio.file.Path config) {
+        sharedEnabled=false;
+        repository=new RateConfigurationRepository(config); reload();
     }
 
     // -------------------------------------------------------------------------
@@ -102,11 +131,11 @@ public class BuyRateService {
      * @param marketValue     unit market price
      * @return payout result with amounts and rates applied
      */
-    public PayoutResult computePayout(String setCode, String collectorNumber,
+    public synchronized PayoutResult computePayout(String setCode, String collectorNumber,
                                       String cardName, BigDecimal marketValue) {
         // 1. Bounty lookup by card name
         if (cardName != null && !cardName.isEmpty()) {
-            BountyCard bounty = bounties.get(cardName.toUpperCase());
+            BountyCard bounty = bounties.get(cardName.toUpperCase(java.util.Locale.ROOT));
             if (bounty != null) {
                 BigDecimal credit = marketValue.multiply(bounty.creditRate).setScale(2, RoundingMode.HALF_UP);
                 BigDecimal check  = marketValue.multiply(bounty.checkRate).setScale(2, RoundingMode.HALF_UP);
@@ -129,31 +158,46 @@ public class BuyRateService {
         return new PayoutResult(credit, check, DEFAULT_CREDIT, DEFAULT_CHECK, false);
     }
 
-    /**
-     * Re-reads rules and bounties. Checks the shared folder first; if a
-     * {@code buy_rates.json} exists there that is newer than the last-seen
-     * version, loads from it and back-fills local preferences.  Falls back
-     * to local preferences when no shared file is available.
-     */
-    public void reload() {
-        if (loadFromSharedFileIfNewer()) return;
-        rules    = loadRulesFromLocalFile();
-        bounties = loadBountiesFromLocalFile();
+    /** Reloads the validated local document without consulting the network share. */
+    public synchronized void reload() {
+        try {
+            JSONObject data=repository.read();
+            if (data.isEmpty()) {
+                rules=new ArrayList<>(List.of(new BuyRateRule(DEFAULT_THRESHOLD,DEFAULT_CREDIT,DEFAULT_CHECK)));
+                bounties=new HashMap<>(); revision=""; return;
+            }
+            RateConfigurationRepository.validate(data);
+            PUBLISHED.put(repository.path(),data.toString());
+            rules=buildDescendingList(parseRulesJson(data.getJSONArray("rules")));
+            bounties=buildBountyMap(parseBountiesJson(data.optJSONArray("bounties")));
+            revision=data.optString("revision");
+            syncStatus=data.optBoolean("pending") ? "pending sync" : "saved locally";
+        } catch (IOException e) { throw new java.io.UncheckedIOException("Could not load buy rates",e); }
     }
 
-    /**
-     * Polls the shared folder for a {@code buy_rates.json} that is newer
-     * than the last-seen version.  If found, loads it, updates local
-     * preferences, and increments {@link #saveGeneration} so that
-     * {@code TradePanel} refreshes its payout display.
-     *
-     * <p>Called by {@code TradePanel} on panel-show and before each summary
-     * refresh so cross-machine rate changes are picked up automatically.
-     */
+    /** Background revision-checked sync. Publishes snapshots without replacing an open editor. */
     public void pollSharedFolder() {
-        if (loadFromSharedFileIfNewer()) {
-            saveGeneration++;
+        if (!sharedEnabled) return;
+        String path=preferences().get("shared.trades.folder", "");
+        if (path.isBlank()) return;
+        try {
+            syncStatus=repository.sync(java.nio.file.Path.of(path).resolve(SHARED_FILE));
+            JSONObject data=repository.read();
+            if (!data.isEmpty()) { RateConfigurationRepository.validate(data); PUBLISHED.put(repository.path(),data.toString()); saveGeneration++; }
         }
+        catch (Exception e) { syncStatus="pending sync: "+e.getMessage(); }
+    }
+
+    public RateConfigurationRepository.Review reviewSharedRates() throws IOException {
+        String path = preferences().get("shared.trades.folder", "");
+        if (path.isBlank()) throw new IOException("Set a shared trades folder before reviewing shared rates.");
+        return repository.review(java.nio.file.Path.of(path).resolve(SHARED_FILE));
+    }
+    public void resolveSharedRates(RateConfigurationRepository.Review review, RateConfigurationRepository.Choice choice) throws IOException {
+        repository.resolve(review, choice);
+        reload();
+        syncStatus = "synced";
+        saveGeneration++;
     }
 
     /**
@@ -161,7 +205,7 @@ public class BuyRateService {
      *
      * @return list of rules ascending by threshold
      */
-    public List<BuyRateRule> getRules() {
+    public synchronized List<BuyRateRule> getRules() {
         List<BuyRateRule> ascending = new ArrayList<>(rules);
         ascending.sort(Comparator.comparing(r -> r.thresholdMin));
         return ascending;
@@ -172,9 +216,9 @@ public class BuyRateService {
      *
      * @return list of all bounty cards sorted alphabetically by name
      */
-    public List<BountyCard> getBounties() {
+    public synchronized List<BountyCard> getBounties() {
         List<BountyCard> list = new ArrayList<>(bounties.values());
-        list.sort(Comparator.comparing(b -> b.cardName.toUpperCase()));
+        list.sort(Comparator.comparing(b -> b.cardName.toUpperCase(java.util.Locale.ROOT)));
         return list;
     }
 
@@ -187,7 +231,7 @@ public class BuyRateService {
      * @param newRules rules to persist (must contain a catch-all)
      * @throws IllegalArgumentException if no catch-all rule is present
      */
-    public void saveRules(List<BuyRateRule> newRules) {
+    public synchronized void saveRules(List<BuyRateRule> newRules) {
         boolean hasCatchAll = newRules.stream()
                 .anyMatch(r -> r.thresholdMin.compareTo(BigDecimal.ZERO) == 0);
         if (!hasCatchAll) {
@@ -195,8 +239,10 @@ public class BuyRateService {
                     "Rules must include a catch-all row with Min Price = $0.00.");
         }
 
-        rules = buildDescendingList(newRules);
+        if (newRules.stream().map(r -> r.thresholdMin.stripTrailingZeros()).distinct().count() != newRules.size())
+            throw new IllegalArgumentException("Duplicate price thresholds are not allowed");
         writeLocalFile(newRules, bounties.values());
+        rules = buildDescendingList(newRules);
         saveGeneration++;
         writeToSharedFolder();
     }
@@ -206,9 +252,9 @@ public class BuyRateService {
      *
      * @param newBounties bounties to persist
      */
-    public void saveBounties(List<BountyCard> newBounties) {
-        bounties = buildBountyMap(newBounties);
+    public synchronized void saveBounties(List<BountyCard> newBounties) {
         writeLocalFile(rules, newBounties);
+        bounties = buildBountyMap(newBounties);
         saveGeneration++;
         writeToSharedFolder();
     }
@@ -230,35 +276,37 @@ public class BuyRateService {
      * @throws IOException if the file cannot be read or a data line is malformed
      */
     public List<BountyCard> parseBountyCsv(File file) throws IOException {
-        List<BountyCard> result = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-            String line;
-            int lineNum = 0;
-            while ((line = reader.readLine()) != null) {
-                lineNum++;
-                String trimmed = line.trim();
-                if (trimmed.isEmpty() || trimmed.startsWith("#")) continue;
-                // Skip header row
-                if (trimmed.toUpperCase().startsWith("CARD NAME")) continue;
-
-                String[] parts = trimmed.split(",", 3);
-                if (parts.length < 3) {
-                    throw new IOException("Line " + lineNum + ": expected 3 columns, got " + parts.length);
-                }
-                try {
-                    String name       = parts[0].trim();
-                    BigDecimal credit = new BigDecimal(parts[1].trim()).divide(new BigDecimal("100"));
-                    BigDecimal check  = new BigDecimal(parts[2].trim()).divide(new BigDecimal("100"));
-                    if (name.isEmpty()) {
-                        throw new IOException("Line " + lineNum + ": card name is empty");
-                    }
-                    result.add(new BountyCard(name, credit, check));
-                } catch (NumberFormatException e) {
-                    throw new IOException("Line " + lineNum + ": " + e.getMessage());
-                }
+        List<BountyCard> result=new ArrayList<>();
+        boolean preserveSemicolons=false;
+        try (var reader=Files.newBufferedReader(file.toPath(),java.nio.charset.StandardCharsets.UTF_8);
+             var parser=org.apache.commons.csv.CSVFormat.DEFAULT.builder().setCommentMarker('#').setIgnoreEmptyLines(true).get().parse(reader)) {
+            for (var row:parser) {
+                if (row.getRecordNumber()==1 && "OCC bounty CSV v2".equals(row.getComment())) preserveSemicolons=true;
+                if (row.getRecordNumber()==1 && row.get(0).trim().equalsIgnoreCase("CARD NAME")) continue;
+                if (row.size()!=3) throw new IOException("Expected three columns at record "+row.getRecordNumber());
+                // Older exports replaced commas with semicolons. Versioned exports preserve punctuation exactly.
+                String name=row.get(0).trim();
+                if (!preserveSemicolons) name=name.replace(';',',');
+                try { result.add(new BountyCard(name,new BigDecimal(row.get(1).trim()).movePointLeft(2),new BigDecimal(row.get(2).trim()).movePointLeft(2))); }
+                catch (IllegalArgumentException e) { throw new IOException("Invalid bounty at record "+row.getRecordNumber(),e); }
             }
         }
         return result;
+    }
+
+    /** Writes quoted CSV without changing card names; the marker distinguishes it from legacy exports. */
+    public void exportBountyCsv(File file, List<BountyCard> bounties) throws IOException {
+        var text=new java.io.StringWriter();
+        var format=org.apache.commons.csv.CSVFormat.DEFAULT.builder().setCommentMarker('#').get();
+        try (var csv=new org.apache.commons.csv.CSVPrinter(text,format)) {
+            csv.printComment("OCC bounty CSV v2");
+            csv.printRecord("CARD NAME","CREDIT PERCENT","CHECK PERCENT");
+            for (BountyCard bounty:bounties) {
+                csv.printRecord(bounty.cardName,bounty.creditRate.movePointRight(2).toPlainString(),
+                        bounty.checkRate.movePointRight(2).toPlainString());
+            }
+        }
+        com.cardpricer.util.AtomicFiles.write(file.toPath(),text.toString());
     }
 
     /**
@@ -282,105 +330,15 @@ public class BuyRateService {
     /** Writes rules and bounties together to the local JSON config file. */
     private void writeLocalFile(Iterable<BuyRateRule> ruleList, Iterable<BountyCard> bountyList) {
         try {
-            JSONObject root = new JSONObject();
-            root.put("rules",    buildRulesJson(ruleList));
-            root.put("bounties", buildBountiesJson(bountyList));
-            Files.writeString(localConfigFile().toPath(), root.toString(2));
-        } catch (Exception e) {
-            System.err.println("[BuyRateService] Failed to write " + LOCAL_CONFIG_FILE + ": " + e.getMessage());
-        }
+            JSONObject data=new JSONObject().put("rules",buildRulesJson(ruleList)).put("bounties",buildBountiesJson(bountyList));
+            RateConfigurationRepository.validate(data);
+            JSONObject saved=repository.save(revision,data); revision=saved.getString("revision"); syncStatus="pending sync";
+            PUBLISHED.put(repository.path(),saved.toString());
+        } catch (IOException e) { throw new java.io.UncheckedIOException(e); }
     }
 
-    private List<BuyRateRule> loadRulesFromLocalFile() {
-        List<BuyRateRule> list = new ArrayList<>();
-        File f = localConfigFile();
-        if (f.exists()) {
-            try {
-                JSONObject root = new JSONObject(Files.readString(f.toPath()));
-                list = parseRulesJson(root.optJSONArray("rules"));
-            } catch (Exception e) {
-                System.err.println("[BuyRateService] Failed to parse rules from local file: " + e.getMessage());
-            }
-        }
-        ensureCatchAll(list);
-        return buildDescendingList(list);
-    }
-
-    private Map<String, BountyCard> loadBountiesFromLocalFile() {
-        File f = localConfigFile();
-        if (!f.exists()) return new HashMap<>();
-        try {
-            JSONObject root = new JSONObject(Files.readString(f.toPath()));
-            return buildBountyMap(parseBountiesJson(root.optJSONArray("bounties")));
-        } catch (Exception e) {
-            System.err.println("[BuyRateService] Failed to parse bounties from local file: " + e.getMessage());
-            return new HashMap<>();
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Private helpers — shared folder
-    // -------------------------------------------------------------------------
-
-    /** Resolves the shared folder from the same Preferences node used by PreferencesPanel. */
-    private static File resolveSharedFolder() {
-        String path = PREFS.get(PreferencesPanel.SHARED_FOLDER_KEY, "");
-        if (path.isBlank()) return null;
-        File dir = new File(path);
-        return (dir.exists() && dir.isDirectory()) ? dir : null;
-    }
-
-    /**
-     * Writes current rules and bounties to {@code buy_rates.json} in the
-     * shared folder.  Best-effort — failures are logged but not propagated.
-     */
     private void writeToSharedFolder() {
-        File dir = resolveSharedFolder();
-        if (dir == null) return;
-        try {
-            JSONObject root = new JSONObject();
-            root.put("rules",    buildRulesJson(rules));
-            root.put("bounties", buildBountiesJson(bounties.values()));
-            File dest = new File(dir, SHARED_FILE);
-            Files.writeString(dest.toPath(), root.toString(2));
-            lastSharedModified = dest.lastModified();
-            System.out.println("[BuyRateService] Wrote buy_rates.json to shared folder.");
-        } catch (Exception e) {
-            System.err.println("[BuyRateService] Failed to write shared buy_rates.json: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Loads rules and bounties from the shared {@code buy_rates.json} if it
-     * is newer than the last version seen by this instance.  Mirrors the data
-     * to the local config file so future restarts stay in sync.
-     *
-     * @return {@code true} if new data was loaded from the shared file
-     */
-    private boolean loadFromSharedFileIfNewer() {
-        File dir = resolveSharedFolder();
-        if (dir == null) return false;
-        File sharedFile = new File(dir, SHARED_FILE);
-        if (!sharedFile.exists()) return false;
-        long fileModified = sharedFile.lastModified();
-        if (fileModified <= lastSharedModified) return false;
-
-        try {
-            JSONObject root      = new JSONObject(Files.readString(sharedFile.toPath()));
-            List<BuyRateRule> r  = parseRulesJson(root.optJSONArray("rules"));
-            List<BountyCard>  b  = parseBountiesJson(root.optJSONArray("bounties"));
-            ensureCatchAll(r);
-            this.rules    = buildDescendingList(r);
-            this.bounties = buildBountyMap(b);
-            lastSharedModified = fileModified;
-            // Mirror to local config file so the app works offline next time
-            writeLocalFile(r, b);
-            System.out.println("[BuyRateService] Synced buy rates from shared folder.");
-            return true;
-        } catch (Exception e) {
-            System.err.println("[BuyRateService] Failed to read shared buy_rates.json: " + e.getMessage());
-            return false;
-        }
+        TaskCoordinator.submit(this::pollSharedFolder);
     }
 
     // -------------------------------------------------------------------------
@@ -416,9 +374,9 @@ public class BuyRateService {
             try {
                 JSONObject obj = arr.getJSONObject(i);
                 list.add(new BuyRateRule(
-                        new BigDecimal(obj.getString("thresholdMin")),
-                        new BigDecimal(obj.getString("creditRate")),
-                        new BigDecimal(obj.getString("checkRate"))));
+                        obj.getBigDecimal("thresholdMin"),
+                        obj.getBigDecimal("creditRate"),
+                        obj.getBigDecimal("checkRate")));
             } catch (Exception e) {
                 System.err.println("[BuyRateService] Skipping malformed rule at index " + i);
             }
@@ -434,8 +392,8 @@ public class BuyRateService {
                 JSONObject obj = arr.getJSONObject(i);
                 list.add(new BountyCard(
                         obj.getString("cardName"),
-                        new BigDecimal(obj.getString("creditRate")),
-                        new BigDecimal(obj.getString("checkRate"))));
+                        obj.getBigDecimal("creditRate"),
+                        obj.getBigDecimal("checkRate")));
             } catch (Exception e) {
                 System.err.println("[BuyRateService] Skipping malformed bounty at index " + i);
             }

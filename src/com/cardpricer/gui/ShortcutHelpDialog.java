@@ -25,6 +25,9 @@ public class ShortcutHelpDialog extends JDialog {
         super(owner, dialogTitle, ModalityType.MODELESS);
         setResizable(true);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+        getRootPane().registerKeyboardAction(e -> dispose(),
+                KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW);
         buildContent(dialogTitle, columnNames, rows);
         pack();
         setLocationRelativeTo(owner);
@@ -136,6 +139,7 @@ public class ShortcutHelpDialog extends JDialog {
 
         // Close button
         JButton closeBtn = new JButton("Close");
+        closeBtn.setToolTipText("Close (Esc)");
         closeBtn.setFocusPainted(false);
         closeBtn.addActionListener(e -> dispose());
         JPanel south = new JPanel(new FlowLayout(FlowLayout.RIGHT));

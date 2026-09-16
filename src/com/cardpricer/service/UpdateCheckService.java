@@ -91,17 +91,8 @@ public class UpdateCheckService {
      * @return {@code true} if {@code candidate} is strictly newer than {@code current}
      */
     static boolean isNewer(String candidate, String current) {
-        try {
-            int[] c = parse(candidate);
-            int[] x = parse(current);
-            for (int i = 0; i < 3; i++) {
-                if (c[i] > x[i]) return true;
-                if (c[i] < x[i]) return false;
-            }
-            return false;
-        } catch (Exception e) {
-            return false;
-        }
+        try { return com.cardpricer.util.VersionNumber.parse(candidate).compareTo(com.cardpricer.util.VersionNumber.parse(current))>0; }
+        catch (IllegalArgumentException e) { return false; }
     }
 
     private static int[] parse(String v) {

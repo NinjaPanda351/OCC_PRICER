@@ -23,10 +23,9 @@ import java.util.List;
 public class ScryfallApiService {
     private static final String SEARCH_API = "https://api.scryfall.com/cards/search";
     private static final String CARD_API = "https://api.scryfall.com/cards";
-    private static final String USER_AGENT = "CardPricerApp/1.0";
-    /** /cards/search is limited to 2 req/sec — wait at least 500 ms between paginated calls. */
+    /** Conservative application spacing in addition to the shared request limiter. */
     private static final int SEARCH_RATE_LIMIT_MS = 500;
-    /** How long to pause after receiving HTTP 429 before retrying (Scryfall docs: 30 seconds). */
+    /** Application backoff after HTTP 429; a request gets at most one retry. */
     private static final int RATE_LIMITED_BACKOFF_MS = 30_000;
 
     /**
@@ -54,7 +53,7 @@ public class ScryfallApiService {
                 // Check if there are more pages
                 if (response.getBoolean("has_more")) {
                     nextPage = response.getString("next_page");
-                    Thread.sleep(SEARCH_RATE_LIMIT_MS); // /cards/search: 2 req/sec
+                    Thread.sleep(SEARCH_RATE_LIMIT_MS);
                 } else {
                     nextPage = null;
                 }
@@ -113,9 +112,9 @@ public class ScryfallApiService {
         try {
             URI uri = new URI(urlStr);
             URL url = uri.toURL();
-            conn = (HttpURLConnection) url.openConnection();
+            conn = ProviderRequests.open(urlStr);
             conn.setRequestMethod("GET");
-            conn.setRequestProperty("User-Agent", USER_AGENT);
+
             conn.setConnectTimeout(10000); // 10 second timeout
             conn.setReadTimeout(10000);
 
@@ -141,11 +140,13 @@ public class ScryfallApiService {
 
             // Read the response
             BufferedReader in = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream()));
+                    new InputStreamReader(conn.getInputStream(),java.nio.charset.StandardCharsets.UTF_8));
             StringBuilder response = new StringBuilder();
             String line;
 
             while ((line = in.readLine()) != null) {
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+                if (response.length()+line.length()>16*1024*1024) throw new java.io.IOException("API response too large");
                 response.append(line);
             }
             in.close();
@@ -173,90 +174,8 @@ public class ScryfallApiService {
      * @return A populated Card object
      */
     public Card parseCardFromJson(JSONObject json) {
-        Card card = new Card();
-
-        // PLST (The List) override: store as the original set, not as "plst"
-        if ("plst".equals(json.getString("set"))) {
-            String plstNum = json.getString("collector_number"); // e.g. "ARB-1"
-            int idx = plstNum.lastIndexOf('-');
-            if (idx > 0) {
-                card.setName(json.getString("name"));
-                card.setSetCode(plstNum.substring(0, idx).toUpperCase());  // "ARB"
-                card.setCollectorNumber(plstNum.substring(idx + 1));       // "1"
-                card.setRarity(json.getString("rarity"));
-                card.setArtist(json.getString("artist"));
-                if (json.has("prices")) {
-                    JSONObject prices = json.getJSONObject("prices");
-                    card.setPrice(!prices.isNull("usd") ? prices.getString("usd") : null);
-                    card.setFoilPrice(!prices.isNull("usd_foil") ? prices.getString("usd_foil") : null);
-                    card.setEtchedPrice(!prices.isNull("usd_etched") ? prices.getString("usd_etched") : null);
-                }
-                if (json.has("reserved")) card.setReserved(json.getBoolean("reserved"));
-                extractImageUrl(json, card);
-                return card;
-            }
-        }
-
-        String rawCollectorNumber = json.getString("collector_number");
-
-        // Remove Scryfall special markers like ★
-        String cleanedCollectorNumber =
-                rawCollectorNumber.replaceAll("[^0-9A-Za-z]", "");
-
-        // Set required fields
-        card.setName(json.getString("name"));
-
-        String originalSetCode = json.getString("set");
-        String updatedSetCode = SetList.getApiCode(originalSetCode);
-        card.setSetCode(updatedSetCode);
-
-        card.setCollectorNumber(cleanedCollectorNumber);
-        card.setRarity(json.getString("rarity"));
-        card.setArtist(json.getString("artist"));
-
-        extractImageUrl(json, card);
-
-        // Handle prices (nested in "prices" object)
-        if (json.has("prices")) {
-            JSONObject prices = json.getJSONObject("prices");
-
-            // Normal price
-            if (!prices.isNull("usd")) {
-                card.setPrice(prices.getString("usd"));
-            } else {
-                card.setPrice(null); // Will be set to "N/A" by setter
-            }
-
-            // Foil price
-            if (!prices.isNull("usd_foil")) {
-                card.setFoilPrice(prices.getString("usd_foil"));
-            } else {
-                card.setFoilPrice(null); // Will be set to "N/A" by setter
-            }
-
-            // Etched price
-            if (!prices.isNull("usd_etched")) {
-                card.setEtchedPrice(prices.getString("usd_etched"));
-            } else {
-                card.setEtchedPrice(null); // Will be set to "N/A" by setter
-            }
-        }
-
-        // Reserved List flag
-        if (json.has("reserved")) {
-            card.setReserved(json.getBoolean("reserved"));
-        }
-
-        // Frame effects (showcase, extendedart, borderless, etched, etc.)
-        if (json.has("frame_effects")) {
-            JSONArray fxArray = json.getJSONArray("frame_effects");
-            List<String> frameEffects = new ArrayList<>();
-            for (int i = 0; i < fxArray.length(); i++) {
-                frameEffects.add(fxArray.getString(i));
-            }
-            card.setFrameEffects(frameEffects);
-        }
-
+        Card card=ProviderCardMapper.fromJson(json);
+        card.setPriceObservedAt(java.time.Instant.now().toString());
         return card;
     }
 

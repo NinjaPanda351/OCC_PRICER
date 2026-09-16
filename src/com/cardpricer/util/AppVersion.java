@@ -1,13 +1,27 @@
 package com.cardpricer.util;
 
 /**
- * Single source of truth for the current application version.
- * This constant is checked at startup against the latest GitHub release.
+ * Reads the application version generated from pom.xml by the build.
  */
 public final class AppVersion {
 
-    /** Current application version — update this with each release. */
-    public static final String CURRENT = "4.1.6";
+    public static final String CURRENT = loadVersion();
+
+    private static String loadVersion() {
+        try (var input = AppVersion.class.getResourceAsStream("/app-version.properties")) {
+            if (input == null) throw new IllegalStateException("Missing build version. Build with Maven.");
+            var properties = new java.util.Properties();
+            properties.load(input);
+            String version = properties.getProperty("version");
+            if (version == null || !version.matches("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?")) {
+                throw new IllegalStateException("Invalid build version. Build with Maven.");
+            }
+            VersionNumber.parse(version);
+            return version;
+        } catch (java.io.IOException ex) {
+            throw new ExceptionInInitializerError(ex);
+        }
+    }
 
     /** GitHub owner/repo used by {@link com.cardpricer.service.UpdateCheckService}. */
     public static final String GITHUB_OWNER = "NinjaPanda351";

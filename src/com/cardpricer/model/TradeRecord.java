@@ -21,6 +21,9 @@ public class TradeRecord {
     public final BigDecimal totalValue;
     /** Total number of cards in the trade as parsed from the receipt. */
     public final int totalCards;
+    public final java.util.UUID tradeId;
+    public final long revision;
+    public final boolean inventoried;
 
     /**
      * Creates an immutable TradeRecord.
@@ -36,6 +39,12 @@ public class TradeRecord {
     public TradeRecord(String filename, LocalDateTime date, String customerName,
                        String traderName, String paymentMethod,
                        BigDecimal totalValue, int totalCards) {
+        this(filename, date, customerName, traderName, paymentMethod, totalValue, totalCards, null, 0, false);
+    }
+
+    public TradeRecord(String filename, LocalDateTime date, String customerName,
+                       String traderName, String paymentMethod, BigDecimal totalValue, int totalCards,
+                       java.util.UUID tradeId, long revision, boolean inventoried) {
         this.filename      = filename;
         this.date          = date;
         this.customerName  = customerName;
@@ -43,5 +52,17 @@ public class TradeRecord {
         this.paymentMethod = paymentMethod;
         this.totalValue    = totalValue;
         this.totalCards    = totalCards;
+        this.tradeId = tradeId;
+        this.revision = revision;
+        this.inventoried = inventoried;
+    }
+
+    public String historyKey() {
+        return tradeId == null ? "receipt:" + java.nio.file.Path.of(filename).getFileName() : "trade:" + tradeId;
+    }
+
+    public TradeRecord withInventoried(boolean value) {
+        return new TradeRecord(filename, date, customerName, traderName, paymentMethod, totalValue,
+                totalCards, tradeId, revision, value);
     }
 }

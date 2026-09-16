@@ -11,6 +11,7 @@ import javax.swing.border.EmptyBorder;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableRowSorter;
 import java.awt.*;
+import java.awt.datatransfer.StringSelection;
 import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -46,6 +47,7 @@ public class FileManagerPanel extends JPanel {
         {"Refresh",         "Reload the file list from disk"},
         {"Open",            "Open the file with your default application"},
         {"Copy to Local",   "Copy a shared file into local storage"},
+        {"Copy file path",  "Copy full paths of selected files or a history receipt to the clipboard"},
         {"Delete",          "Permanently remove the selected file"},
         {"--- History", ""},
         {"Search",          "Filter trade history by customer or date"},
@@ -56,6 +58,7 @@ public class FileManagerPanel extends JPanel {
 
     // Local files tab
     private JTable fileTable;
+    private JTabbedPane tabs;
     private DefaultTableModel tableModel;
     private JComboBox<String> categoryCombo;
     private JLabel statusLabel;
@@ -72,6 +75,19 @@ public class FileManagerPanel extends JPanel {
     private JTextField historySearchField;
     private JComboBox<String> historyPaymentCombo;   // F12
     private JLabel historyStatusLabel;
+    private JComboBox<String> historyInventoryFilter;
+    private JCheckBox inventoriedCheck;
+    private JButton editTradeButton;
+    private boolean inventorySavePending;
+    private JLabel inventorySyncLabel;
+    private boolean historyRefreshRunning;
+    private long inventorySyncGeneration=-1;
+    private final Timer inventoryRefreshTimer=new Timer(2_000,e -> {
+        if (!isShowing() || tabs.getSelectedIndex()!=2) return;
+        inventorySyncLabel.setText(com.cardpricer.service.InventoryStatusSyncService.status());
+        if (inventorySyncGeneration!=com.cardpricer.service.InventoryStatusSyncService.generation()) refreshHistoryList(false);
+    });
+    private java.util.function.Consumer<com.cardpricer.model.TradeDraft> tradeEditor;
     private List<TradeRecord> allRecords = new ArrayList<>();
 
     // F11: Content cache for full-text search
@@ -97,11 +113,11 @@ public class FileManagerPanel extends JPanel {
     /** Constructs the File Manager panel and loads the local file list immediately. */
     public FileManagerPanel() {
         setLayout(new BorderLayout(15, 15));
-        setBorder(new EmptyBorder(20, 20, 20, 20));
+        setBorder(new EmptyBorder(16, 20, 14, 20));
 
         add(createTopPanel(), BorderLayout.NORTH);
 
-        JTabbedPane tabs = new JTabbedPane();
+        tabs = new JTabbedPane();
         tabs.addTab("Local Files",  createLocalTab());
         tabs.addTab("Shared Files", createSharedTab());
         tabs.addTab("History",      createHistoryTab());
@@ -110,6 +126,10 @@ public class FileManagerPanel extends JPanel {
             int idx = tabs.getSelectedIndex();
             if (idx == 1) refreshSharedFileList();
             if (idx == 2) refreshHistoryList();
+        });
+        addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & java.awt.event.HierarchyEvent.SHOWING_CHANGED)!=0
+                    && isShowing() && tabs.getSelectedIndex()==2) refreshHistoryList();
         });
         add(tabs, BorderLayout.CENTER);
 
@@ -120,12 +140,12 @@ public class FileManagerPanel extends JPanel {
     private JPanel createTopPanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
-        JPanel titlePanel = AppTheme.panelHeader("File Manager",
+        JPanel titlePanel = AppTheme.panelHeader("Files & history",
                 "Browse generated files and trade history");
 
         JButton helpBtn = new JButton("?");
-        helpBtn.setFocusPainted(false);
-        helpBtn.setPreferredSize(new Dimension(34, 34));
+
+
         helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
         helpBtn.setToolTipText("Help");
         helpBtn.addActionListener(e ->
@@ -134,16 +154,14 @@ public class FileManagerPanel extends JPanel {
 
         JPanel titleRow = new JPanel(new BorderLayout(10, 0));
         titleRow.add(titlePanel, BorderLayout.CENTER);
-        titleRow.add(helpBtn,    BorderLayout.EAST);
+        JPanel headerActions = AppTheme.transparent(new com.cardpricer.gui.WrapLayout(FlowLayout.RIGHT, 0, 0));
+        headerActions.add(helpBtn);
+        titleRow.add(headerActions, BorderLayout.EAST);
 
         panel.add(titleRow, BorderLayout.NORTH);
 
         // Filter section
-        JPanel filterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
-        filterPanel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("Filter"),
-                new EmptyBorder(10, 10, 10, 10)
-        ));
+        JPanel filterPanel = AppTheme.surface(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 10, 0), 16);
 
         JLabel filterLabel = new JLabel("Category:");
         categoryCombo = new JComboBox<>(CATEGORIES);
@@ -151,8 +169,8 @@ public class FileManagerPanel extends JPanel {
         categoryCombo.addActionListener(e -> refreshFileList());
 
         JButton refreshButton = new JButton("Refresh");
-        refreshButton.setFocusPainted(false);
-        refreshButton.setPreferredSize(new Dimension(100, 32));
+
+
         refreshButton.addActionListener(e -> refreshFileList());
 
         filterPanel.add(filterLabel);
@@ -169,6 +187,14 @@ public class FileManagerPanel extends JPanel {
         return panel;
     }
 
+    /** Allows the dashboard history action to open the requested tab directly. */
+    public void showHistory() { if (tabs.getSelectedIndex()==2) refreshHistoryList(); else tabs.setSelectedIndex(2); }
+
+    public void setTradeEditor(java.util.function.Consumer<com.cardpricer.model.TradeDraft> editor) { tradeEditor=editor; }
+
+    @Override public void addNotify() { super.addNotify();inventoryRefreshTimer.start(); }
+    @Override public void removeNotify() { inventoryRefreshTimer.stop();super.removeNotify(); }
+
     private JPanel createLocalTab() {
         JPanel tab = new JPanel(new BorderLayout(10, 10));
         tab.add(createTablePanel(), BorderLayout.CENTER);
@@ -182,11 +208,11 @@ public class FileManagerPanel extends JPanel {
         JPanel tab = new JPanel(new BorderLayout(10, 10));
 
         // Header
-        JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
+        JPanel header = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 10, 6));
         sharedStatusLabel = new JLabel("Configure a shared folder in Preferences → Network");
         sharedStatusLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
         JButton refreshBtn = new JButton("Refresh");
-        refreshBtn.setFocusPainted(false);
+
         refreshBtn.addActionListener(e -> refreshSharedFileList());
         header.add(sharedStatusLabel);
         header.add(refreshBtn);
@@ -196,9 +222,9 @@ public class FileManagerPanel extends JPanel {
         sharedTableModel = new DefaultTableModel(cols, 0) {
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
-        sharedTable = new JTable(sharedTableModel);
+        sharedTable = new com.cardpricer.gui.EmptyStateTable(sharedTableModel, "Your shared files will appear here", "Configure a shared folder in Preferences to connect this workspace.");
         sharedTable.setFont(sharedTable.getFont().deriveFont(14f));
-        sharedTable.setRowHeight(28);
+        AppTheme.styleTable(sharedTable);
         sharedTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         TableRowSorter<DefaultTableModel> sharedSorter = new TableRowSorter<>(sharedTableModel);
         sharedSorter.setComparator(2, FileManagerPanel::compareSizeStrings); // Size — numeric
@@ -210,22 +236,24 @@ public class FileManagerPanel extends JPanel {
         sharedTable.getColumnModel().getColumn(3).setPreferredWidth(150);
         sharedTable.getColumnModel().getColumn(4).setPreferredWidth(250);
 
-        JScrollPane scroll = new JScrollPane(sharedTable);
-        scroll.setBorder(BorderFactory.createTitledBorder("Shared Trades Folder"));
+        JScrollPane scroll = new com.cardpricer.gui.ResponsiveTableScroll(sharedTable, 200, 90, 80, 140, 180);
+        scroll.setColumnHeaderView(sharedTable.getTableHeader()); scroll.setBorder(AppTheme.cardBorder(0));
 
         // Buttons
-        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
+        JPanel btnPanel = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.RIGHT, 10, 5));
         JButton openBtn = new JButton("Open");
-        openBtn.setFocusPainted(false);
-        openBtn.setPreferredSize(new Dimension(110, 36));
+
+
         openBtn.addActionListener(e -> openSharedFile());
 
         JButton copyBtn = new JButton("Copy to Local");
-        copyBtn.setFocusPainted(false);
-        copyBtn.setPreferredSize(new Dimension(140, 36));
+
+
         copyBtn.addActionListener(e -> copySharedToLocal());
 
         btnPanel.add(openBtn);
+        btnPanel.add(createCopyPathButton(sharedTable,
+                row -> (String) sharedTableModel.getValueAt(row, 4), sharedStatusLabel));
         btnPanel.add(copyBtn);
 
         tab.add(header, BorderLayout.NORTH);
@@ -335,9 +363,9 @@ public class FileManagerPanel extends JPanel {
             }
         };
 
-        fileTable = new JTable(tableModel);
+        fileTable = new com.cardpricer.gui.EmptyStateTable(tableModel, "A home for your saved files", "Trade receipts, pricing exports, and inventory files appear here.");
         fileTable.setFont(fileTable.getFont().deriveFont(14f));
-        fileTable.setRowHeight(28);
+        AppTheme.styleTable(fileTable);
         fileTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
 
         // Column widths
@@ -353,8 +381,8 @@ public class FileManagerPanel extends JPanel {
         fileSorter.setSortKeys(List.of(new RowSorter.SortKey(3, SortOrder.DESCENDING))); // newest first
         fileTable.setRowSorter(fileSorter);
 
-        JScrollPane scrollPane = new JScrollPane(fileTable);
-        scrollPane.setBorder(BorderFactory.createTitledBorder("Generated Files"));
+        JScrollPane scrollPane = new com.cardpricer.gui.ResponsiveTableScroll(fileTable, 200, 90, 80, 140, 180);
+        scrollPane.setColumnHeaderView(fileTable.getTableHeader()); scrollPane.setBorder(AppTheme.cardBorder(0));
 
         panel.add(scrollPane, BorderLayout.CENTER);
 
@@ -365,34 +393,64 @@ public class FileManagerPanel extends JPanel {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
         // Left: Info
-        JLabel infoLabel = new JLabel("Select files and click 'Download' to save to your chosen location");
+        JLabel infoLabel = new JLabel("Select files to download or delete.");
+        infoLabel.setToolTipText("Select files, then choose Download Selected to save them to a folder.");
         infoLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
-        panel.add(infoLabel, BorderLayout.WEST);
+        panel.add(infoLabel, BorderLayout.CENTER);
 
         // Right: Action buttons
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
+        JPanel buttonPanel = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.RIGHT, 10, 5));
 
         JButton downloadButton = new JButton("Download Selected");
-        downloadButton.setFocusPainted(false);
-        downloadButton.setPreferredSize(new Dimension(160, 36));
+
+
         downloadButton.addActionListener(e -> downloadSelected());
 
         JButton openFolderButton = new JButton("Open in File Explorer");
-        openFolderButton.setFocusPainted(false);
-        openFolderButton.setPreferredSize(new Dimension(180, 36));
+
+
         openFolderButton.addActionListener(e -> openSelectedFolder());
 
         JButton deleteButton = AppTheme.dangerButton("Delete Selected");
-        deleteButton.setPreferredSize(new Dimension(140, 36));
+
         deleteButton.addActionListener(e -> deleteSelected());
 
         buttonPanel.add(openFolderButton);
+        buttonPanel.add(createCopyPathButton(fileTable,
+                row -> (String) tableModel.getValueAt(row, 4), statusLabel));
         buttonPanel.add(downloadButton);
         buttonPanel.add(deleteButton);
 
         panel.add(buttonPanel, BorderLayout.EAST);
 
         return panel;
+    }
+
+    private JButton createCopyPathButton(JTable table, java.util.function.IntFunction<String> pathAtRow,
+                                         JLabel feedback) {
+        JButton button = new JButton("Copy file path");
+        button.setToolTipText("Copy the full path; multiple selected paths are copied on separate lines.");
+        button.setEnabled(table.getSelectedRowCount() > 0);
+        table.getSelectionModel().addListSelectionListener(e ->
+                button.setEnabled(table.getSelectedRowCount() > 0));
+        button.addActionListener(e -> {
+            int[] selectedRows = table.getSelectedRows();
+            if (selectedRows.length == 0) return;
+            try {
+                List<String> paths = new ArrayList<>();
+                for (int row : selectedRows) {
+                    String path = pathAtRow.apply(table.convertRowIndexToModel(row));
+                    paths.add(Path.of(path).toAbsolutePath().normalize().toString());
+                }
+                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+                        new StringSelection(String.join(System.lineSeparator(), paths)), null);
+                feedback.setText(paths.size() == 1 ? "File path copied" : paths.size() + " file paths copied");
+            } catch (IllegalStateException | HeadlessException | SecurityException ex) {
+                JOptionPane.showMessageDialog(this, "Could not copy the file path. Please try again.",
+                        "Clipboard unavailable", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+        return button;
     }
 
     private void refreshFileList() {
@@ -437,7 +495,7 @@ public class FileManagerPanel extends JPanel {
                 try {
                     List<Object[]> rows = get();
                     for (Object[] row : rows) tableModel.addRow(row);
-                    statusLabel.setText(String.format("Found %d file(s)", rows.size()));
+                    statusLabel.setText(String.format(java.util.Locale.ROOT, "Found %d file(s)", rows.size()));
                 } catch (Exception ex) {
                     statusLabel.setText("Failed to load files");
                 }
@@ -468,8 +526,8 @@ public class FileManagerPanel extends JPanel {
 
     private String formatFileSize(long bytes) {
         if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
-        return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
+        if (bytes < 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.1f KB", bytes / 1024.0);
+        return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
     }
 
     /** Parses a size string produced by {@link #formatFileSize} back to bytes for numeric sorting. */
@@ -494,7 +552,7 @@ public class FileManagerPanel extends JPanel {
         tab.setBorder(new EmptyBorder(6, 0, 0, 0));
 
         // ── Top: filter row ──────────────────────────────────────────────────
-        JPanel filterRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 4));
+        JPanel filterRow = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 10, 4));
         filterRow.add(new JLabel("Search:"));
         historySearchField = new JTextField(20);
         historySearchField.setToolTipText("Filter by customer, date, or receipt body text");
@@ -511,9 +569,12 @@ public class FileManagerPanel extends JPanel {
         historyPaymentCombo = new JComboBox<>(new String[]{"All", "Credit", "Check", "Partial", "Inventory"});
         historyPaymentCombo.addActionListener(e -> applyHistoryFilter());
         filterRow.add(historyPaymentCombo);
+        historyInventoryFilter=new JComboBox<>(new String[]{"All POS statuses", "Needs inventory", "Inventoried"});
+        historyInventoryFilter.addActionListener(e -> applyHistoryFilter());
+        filterRow.add(historyInventoryFilter);
 
         JButton refreshBtn = new JButton("Refresh");
-        refreshBtn.setFocusPainted(false);
+
         refreshBtn.addActionListener(e -> refreshHistoryList());
         filterRow.add(refreshBtn);
 
@@ -524,9 +585,10 @@ public class FileManagerPanel extends JPanel {
         tab.add(filterRow, BorderLayout.NORTH);
 
         // ── Left pane: trade list ────────────────────────────────────────────
-        String[] cols = {"Date", "Customer", "Payment Type", "Total Value", "# Cards"};
+        String[] cols = {"Date", "Customer", "Payment Type", "Total Value", "# Cards", "In POS"};
         historyTableModel = new DefaultTableModel(cols, 0) {
             @Override public boolean isCellEditable(int r, int c) { return false; }
+            @Override public Class<?> getColumnClass(int c) { return c==5 ? Boolean.class : super.getColumnClass(c); }
         };
         historyTable = new JTable(historyTableModel);
         historyTable.setFont(historyTable.getFont().deriveFont(13f));
@@ -557,39 +619,54 @@ public class FileManagerPanel extends JPanel {
             if (!e.getValueIsAdjusting()) loadHistoryPreview();
         });
 
-        JScrollPane listScroll = new JScrollPane(historyTable);
-        listScroll.setBorder(BorderFactory.createTitledBorder("Trade Receipts"));
+        JScrollPane listScroll = new com.cardpricer.gui.ResponsiveTableScroll(historyTable, 130, 140, 130, 100, 70, 65);
+        listScroll.setColumnHeaderView(historyTable.getTableHeader()); listScroll.setBorder(AppTheme.cardBorder(0));
 
         // ── Right pane: preview ──────────────────────────────────────────────
         historyPreviewArea = new JTextArea();
         historyPreviewArea.setEditable(false);
-        historyPreviewArea.setFont(new Font("Monospaced", Font.PLAIN, 11));
+        historyPreviewArea.setFont(new Font("Monospaced", Font.PLAIN, 13));
         historyPreviewArea.setLineWrap(false);
         JScrollPane previewScroll = new JScrollPane(historyPreviewArea);
-        previewScroll.setBorder(BorderFactory.createTitledBorder("Receipt Preview"));
+        previewScroll.setBorder(AppTheme.sectionBorder("Receipt preview"));
 
         // Action buttons below preview
         JButton histPrintBtn = new JButton("Print");
-        histPrintBtn.setFocusPainted(false);
-        histPrintBtn.setPreferredSize(new Dimension(100, 32));
+
+
         histPrintBtn.addActionListener(e -> historyPrint());
 
         JButton histPdfBtn = new JButton("Save as PDF");
-        histPdfBtn.setFocusPainted(false);
-        histPdfBtn.setPreferredSize(new Dimension(120, 32));
+
+
         histPdfBtn.addActionListener(e -> historySaveAsPdf());
 
         JButton histOpenBtn = new JButton("Open in Explorer");
-        histOpenBtn.setFocusPainted(false);
-        histOpenBtn.setPreferredSize(new Dimension(140, 32));
+
+
         histOpenBtn.addActionListener(e -> historyOpenInExplorer());
 
-        JPanel previewBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 4));
+        JPanel previewBtns = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.RIGHT, 8, 4));
+        editTradeButton=new JButton("Edit trade");
+        editTradeButton.setEnabled(false);
+        editTradeButton.addActionListener(e -> editHistoryTrade());
+        previewBtns.add(editTradeButton);
         previewBtns.add(histPrintBtn);
         previewBtns.add(histPdfBtn);
         previewBtns.add(histOpenBtn);
+        previewBtns.add(createCopyPathButton(historyTable,
+                row -> visibleRecords.get(row).filename, historyStatusLabel));
 
         JPanel rightPanel = new JPanel(new BorderLayout());
+        inventoriedCheck=new JCheckBox("Inventoried into POS");
+        inventoriedCheck.setEnabled(false);
+        inventoriedCheck.setToolTipText("Shared across computers using the same shared trades folder. Corrections need POS review again.");
+        inventoriedCheck.addActionListener(e -> saveInventoryStatus());
+        JPanel inventoryStatus=new JPanel(new BorderLayout(0,4));
+        inventoryStatus.add(inventoriedCheck,BorderLayout.NORTH);
+        inventorySyncLabel=AppTheme.mutedLabel(com.cardpricer.service.InventoryStatusSyncService.status());
+        inventoryStatus.add(inventorySyncLabel,BorderLayout.SOUTH);
+        rightPanel.add(inventoryStatus,BorderLayout.NORTH);
         rightPanel.add(previewScroll, BorderLayout.CENTER);
         rightPanel.add(previewBtns,  BorderLayout.SOUTH);
 
@@ -614,7 +691,7 @@ public class FileManagerPanel extends JPanel {
             lbl.setForeground(statsFg);
         }
 
-        JPanel statsBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4));
+        JPanel statsBar = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 4, 4));
         statsBar.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0,
                 UIManager.getColor("Separator.foreground")));
         statsBar.add(historyStatsTotalTrades);
@@ -626,25 +703,46 @@ public class FileManagerPanel extends JPanel {
         return tab;
     }
 
-    private void refreshHistoryList() {
-        historyTableModel.setRowCount(0);
+    private long historyGeneration;
+
+    private void refreshHistoryList() { refreshHistoryList(true); }
+
+    private void refreshHistoryList(boolean requestSync) {
+        if (historyRefreshRunning || inventorySavePending) return;
+        historyRefreshRunning=true;
+        if (requestSync) com.cardpricer.service.InventoryStatusSyncService.requestSync();
+        long syncGeneration=com.cardpricer.service.InventoryStatusSyncService.generation();
+        long generation=++historyGeneration;
+        historyStatusLabel.setText("Loading...");
+        java.util.Map<String,String> loadedContent=new java.util.HashMap<>();
         new SwingWorker<List<com.cardpricer.model.TradeRecord>, Void>() {
             @Override
             protected List<com.cardpricer.model.TradeRecord> doInBackground() {
-                return TradeHistoryService.loadAll(com.cardpricer.util.AppDataDirectory.tradesPath());
+                var records=TradeHistoryService.loadAll(com.cardpricer.util.AppDataDirectory.tradesPath());
+                for (var record:records) try { loadedContent.put(record.filename,TradeHistoryService.receiptContent(record,com.cardpricer.util.AppDataDirectory.tradesPath())); }
+                catch (Exception failure) { loadedContent.put(record.filename,"Could not load receipt: "+failure.getMessage()); }
+                return records;
             }
             @Override
             protected void done() {
                 try {
+                    if (generation!=historyGeneration) return;
+                    TradeRecord selected=selectedRecord();
+                    int caret=historyPreviewArea.getCaretPosition();
                     allRecords = get();
-                    contentCache.clear();
+                    contentCache.clear(); contentCache.putAll(loadedContent);
                     applyHistoryFilter();
+                    if (selected!=null) selectHistoryRecord(selected.historyKey());
+                    historyPreviewArea.setCaretPosition(Math.min(caret,historyPreviewArea.getDocument().getLength()));
+                    inventorySyncGeneration=syncGeneration;
                 } catch (Exception ex) {
-                    // leave table empty on failure
-                }
+                    historyStatusLabel.setText("Could not load history: " + errorMessage(ex));
+                } finally { historyRefreshRunning=false; }
             }
         }.execute();
     }
+
+    private final java.util.List<TradeRecord> visibleRecords = new java.util.ArrayList<>();
 
     private void applyHistoryFilter() {
         String filter = historySearchField == null ? "" : historySearchField.getText().trim().toLowerCase();
@@ -654,8 +752,11 @@ public class FileManagerPanel extends JPanel {
                 ? "All" : (String) historyPaymentCombo.getSelectedItem();
 
         historyTableModel.setRowCount(0);
+        visibleRecords.clear();
         int shown = 0;
         for (TradeRecord r : allRecords) {
+            int inventoryFilter=historyInventoryFilter==null ? 0 : historyInventoryFilter.getSelectedIndex();
+            if ((inventoryFilter==1 && r.inventoried) || (inventoryFilter==2 && !r.inventoried)) continue;
             // F12: Apply payment method filter first
             if (!"All".equals(paymentFilter)
                     && !r.paymentMethod.toLowerCase().contains(paymentFilter.toLowerCase())) {
@@ -671,12 +772,14 @@ public class FileManagerPanel extends JPanel {
                 if (!nameMatch && !dateMatch && !bodyMatch) continue;
             }
 
+            visibleRecords.add(r);
             historyTableModel.addRow(new Object[]{
                     r.date.format(HISTORY_DATE_FMT),
                     r.customerName,
                     r.paymentMethod,
-                    String.format("$%.2f", r.totalValue),
-                    r.totalCards
+                    String.format(java.util.Locale.ROOT, "$%.2f", r.totalValue),
+                    r.totalCards,
+                    r.inventoried
             });
             shown++;
         }
@@ -687,15 +790,7 @@ public class FileManagerPanel extends JPanel {
     }
 
     /** F11: Returns cached file content, loading on first access. */
-    private String getOrLoadContent(String filename) {
-        return contentCache.computeIfAbsent(filename, path -> {
-            try {
-                return Files.readString(Path.of(path), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                return "";
-            }
-        });
-    }
+    private String getOrLoadContent(String filename) { return contentCache.getOrDefault(filename, ""); }
 
     /** F13: Updates the stats bar with counts and values from the current filtered table. */
     private void updateHistoryStats() {
@@ -723,8 +818,8 @@ public class FileManagerPanel extends JPanel {
 
         historyStatsTotalTrades.setText("Trades: " + tradeCount);
         historyStatsTotalCards.setText("  Cards: " + cardCount);
-        historyStatsTotalValue.setText(String.format("  Total: $%.2f", totalValue));
-        historyStatsAvgValue.setText(String.format("  Avg: $%.2f", avgValue));
+        historyStatsTotalValue.setText(String.format(java.util.Locale.ROOT, "  Total: $%.2f", totalValue));
+        historyStatsAvgValue.setText(String.format(java.util.Locale.ROOT, "  Avg: $%.2f", avgValue));
     }
 
     /** Returns the TradeRecord for the currently selected history row, or null. */
@@ -732,32 +827,108 @@ public class FileManagerPanel extends JPanel {
         int viewRow = historyTable.getSelectedRow();
         if (viewRow < 0) return null;
         int modelRow = historyTable.convertRowIndexToModel(viewRow);
-
-        // Find the matching record in allRecords (accounting for the filter)
-        String dateStr = (String) historyTableModel.getValueAt(modelRow, 0);
-        String customer = (String) historyTableModel.getValueAt(modelRow, 1);
-        for (TradeRecord r : allRecords) {
-            if (r.date.format(HISTORY_DATE_FMT).equals(dateStr)
-                    && r.customerName.equals(customer)) {
-                return r;
-            }
-        }
-        return null;
+        return modelRow < visibleRecords.size() ? visibleRecords.get(modelRow) : null;
     }
 
     private void loadHistoryPreview() {
-        TradeRecord r = selectedRecord();
-        if (r == null) {
-            historyPreviewArea.setText("");
+        TradeRecord record=selectedRecord();
+        historyPreviewArea.setText(record==null ? "" : getOrLoadContent(record.filename));
+        historyPreviewArea.setCaretPosition(0);
+        if (inventoriedCheck!=null) {
+            inventoriedCheck.setSelected(record!=null && record.inventoried);
+            inventoriedCheck.setEnabled(record!=null && !inventorySavePending);
+        }
+        if (editTradeButton!=null) editTradeButton.setEnabled(record!=null && !inventorySavePending);
+    }
+
+    private void saveInventoryStatus() {
+        TradeRecord record=selectedRecord();
+        if (record==null || inventorySavePending) return;
+        boolean value=inventoriedCheck.isSelected();
+        inventorySavePending=true;
+        inventoriedCheck.setEnabled(false);
+        editTradeButton.setEnabled(false);
+        new SwingWorker<Void,Void>() {
+            protected Void doInBackground() throws Exception {
+                TradeHistoryService.repository(com.cardpricer.util.AppDataDirectory.tradesPath()).setInventoried(record,value);
+                return null;
+            }
+            protected void done() {
+                inventorySavePending=false;
+                try {
+                    get();
+                    historyGeneration++;
+                    allRecords.replaceAll(r -> r.historyKey().equals(record.historyKey()) && r.revision==record.revision ? r.withInventoried(value) : r);
+                    applyHistoryFilter();
+                    selectHistoryRecord(record.historyKey());
+                    historyStatusLabel.setText(value ? "Marked inventoried into POS" : "Marked as needing POS inventory");
+                    inventorySyncLabel.setText("POS status: saved locally; syncing...");
+                    com.cardpricer.service.InventoryStatusSyncService.requestSync();
+                } catch (Exception failure) {
+                    loadHistoryPreview();
+                    JOptionPane.showMessageDialog(FileManagerPanel.this,"Could not save POS status: " + errorMessage(failure),"Save failed",JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    private void selectHistoryRecord(String key) {
+        for (int i=0;i<visibleRecords.size();i++) if (visibleRecords.get(i).historyKey().equals(key)) {
+            int view=historyTable.convertRowIndexToView(i);
+            if (view>=0) historyTable.setRowSelectionInterval(view,view);
             return;
         }
-        try {
-            String content = Files.readString(Path.of(r.filename), StandardCharsets.UTF_8);
-            historyPreviewArea.setText(content);
-            historyPreviewArea.setCaretPosition(0);
-        } catch (IOException e) {
-            historyPreviewArea.setText("Could not load file: " + e.getMessage());
-        }
+        loadHistoryPreview();
+    }
+
+    private void editHistoryTrade() {
+        TradeRecord record=selectedRecord();
+        if (record==null) return;
+        if (record.tradeId==null) { editLegacyReceipt(record); return; }
+        editTradeButton.setEnabled(false);
+        new SwingWorker<com.cardpricer.model.TradeDraft,Void>() {
+            protected com.cardpricer.model.TradeDraft doInBackground() throws Exception {
+                var repo=TradeHistoryService.repository(com.cardpricer.util.AppDataDirectory.tradesPath());
+                var draft=repo.committedDraft(record.tradeId);
+                if (draft==null || draft.revision()!=record.revision)
+                    throw new IllegalStateException("Open this trade on the workstation where it was saved, or refresh History if it changed.");
+                return draft;
+            }
+            protected void done() {
+                loadHistoryPreview();
+                try {
+                    var draft=get();
+                    if (tradeEditor==null) throw new IllegalStateException("The trade editor is unavailable");
+                    tradeEditor.accept(draft);
+                } catch (Exception failure) {
+                    JOptionPane.showMessageDialog(FileManagerPanel.this,errorMessage(failure),"Could not open trade",JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    private void editLegacyReceipt(TradeRecord record) {
+        JTextArea text=new JTextArea(getOrLoadContent(record.filename),24,70);
+        text.setFont(new Font("Monospaced",Font.PLAIN,13));
+        JPanel editor=new JPanel(new BorderLayout(8,8));
+        editor.add(new JLabel("Older receipt: edit its text below. The original is backed up; POS exports are not recalculated."),BorderLayout.NORTH);
+        editor.add(new JScrollPane(text),BorderLayout.CENTER);
+        if (JOptionPane.showConfirmDialog(this,editor,"Edit saved receipt",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)!=JOptionPane.OK_OPTION) return;
+        String content=text.getText();
+        new SwingWorker<Void,Void>() {
+            protected Void doInBackground() throws Exception {
+                TradeHistoryService.saveLegacyReceipt(record,content,com.cardpricer.util.AppDataDirectory.tradesPath());return null;
+            }
+            protected void done() {
+                try { get();refreshHistoryList(); }
+                catch (Exception failure) { JOptionPane.showMessageDialog(FileManagerPanel.this,errorMessage(failure),"Could not save receipt",JOptionPane.ERROR_MESSAGE); }
+            }
+        }.execute();
+    }
+
+    private static String errorMessage(Throwable error) {
+        while (error.getCause()!=null) error=error.getCause();
+        return error.getMessage();
     }
 
     private void historyPrint() {
@@ -847,7 +1018,7 @@ public class FileManagerPanel extends JPanel {
             }
         }
 
-        String message = String.format("Download complete!\n\n" +
+        String message = String.format(java.util.Locale.ROOT, "Download complete!\n\n" +
                         "Success: %d file(s)\n" +
                         "Failed: %d file(s)\n\n" +
                         "Location: %s",
@@ -858,7 +1029,7 @@ public class FileManagerPanel extends JPanel {
                 "Download Complete",
                 JOptionPane.INFORMATION_MESSAGE);
 
-        statusLabel.setText(String.format("Downloaded %d file(s)", successCount));
+        statusLabel.setText(String.format(java.util.Locale.ROOT, "Downloaded %d file(s)", successCount));
     }
 
     private void openSelectedFolder() {
@@ -911,7 +1082,7 @@ public class FileManagerPanel extends JPanel {
         }
 
         int confirm = JOptionPane.showConfirmDialog(this,
-                String.format("Delete %d selected file(s)?\n\nThis cannot be undone!",
+                String.format(java.util.Locale.ROOT, "Delete %d selected file(s)?\n\nThis cannot be undone!",
                         selectedRows.length),
                 "Confirm Delete",
                 JOptionPane.YES_NO_OPTION,
@@ -940,7 +1111,7 @@ public class FileManagerPanel extends JPanel {
             }
         }
 
-        String message = String.format("Delete complete!\n\n" +
+        String message = String.format(java.util.Locale.ROOT, "Delete complete!\n\n" +
                         "Deleted: %d file(s)\n" +
                         "Failed: %d file(s)",
                 successCount, failCount);

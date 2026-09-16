@@ -28,7 +28,9 @@ public final class BountyCard {
      * @param checkRate  check payout rate
      */
     public BountyCard(String cardName, BigDecimal creditRate, BigDecimal checkRate) {
-        this.cardName   = cardName;
+        if (cardName == null || cardName.isBlank()) throw new IllegalArgumentException("Card name is required");
+        new BuyRateRule(BigDecimal.ZERO, creditRate, checkRate);
+        this.cardName   = cardName.trim();
         this.creditRate = creditRate;
         this.checkRate  = checkRate;
     }
@@ -51,7 +53,7 @@ public final class BountyCard {
      * @return the HashMap key for this bounty
      */
     public String key() {
-        return cardName.toUpperCase();
+        return cardName.toUpperCase(java.util.Locale.ROOT);
     }
 
     @Override

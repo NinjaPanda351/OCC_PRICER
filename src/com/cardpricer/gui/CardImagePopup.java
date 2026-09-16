@@ -86,7 +86,7 @@ public class CardImagePopup {
         loader = new SwingWorker<>() {
             @Override
             protected ImageIcon doInBackground() throws Exception {
-                BufferedImage img = ImageIO.read(new URL(urlToLoad));
+                BufferedImage img = com.cardpricer.service.CardImageLoader.read(urlToLoad);
                 if (img == null || isCancelled()) return null;
                 int h = img.getHeight() * DISPLAY_WIDTH / img.getWidth();
                 Image scaled = img.getScaledInstance(DISPLAY_WIDTH, h, Image.SCALE_SMOOTH);
@@ -102,8 +102,10 @@ public class CardImagePopup {
                         cache.put(urlToLoad, icon);
                         displayIcon(icon, null); // keep current position
                     }
-                } catch (InterruptedException | ExecutionException ignored) {
+                } catch (InterruptedException ignored) {
                     Thread.currentThread().interrupt();
+                } catch (ExecutionException failure) {
+                    if (urlToLoad.equals(currentUrl)) imageLabel.setText("Image unavailable");
                 }
             }
         };
