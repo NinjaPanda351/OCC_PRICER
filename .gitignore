@@ -25,6 +25,17 @@ bin/
 
 ### VS Code ###
 .vscode/
+.vs/
 
 ### Mac OS ###
 .DS_Store
+
+### Maven, packaging, and workstation data ###
+/target/
+/data/
+/OCC_Trade_Pricer.jar
+/dependency-reduced-pom.xml
+/.idea/libraries/
+/.idea/artifacts/
+/.idea/modules.xml
+/*.iml
