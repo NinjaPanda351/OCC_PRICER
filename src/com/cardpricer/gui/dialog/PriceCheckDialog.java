@@ -50,6 +50,7 @@ public class PriceCheckDialog extends JDialog {
     private JLabel checkOfferLabel;
     private JRadioButton normalRadio;
     private JRadioButton foilRadio;
+    private JRadioButton surgeRadio;
     private JRadioButton etchedRadio;
     private JButton addButton;
     private JLabel statusLabel;
@@ -169,18 +170,22 @@ public class PriceCheckDialog extends JDialog {
         ButtonGroup group = new ButtonGroup();
         normalRadio = new JRadioButton("Normal");
         foilRadio   = new JRadioButton("Foil");
+        surgeRadio  = new JRadioButton("Surge foil");
         etchedRadio = new JRadioButton("Etched");
         normalRadio.setSelected(true);
         group.add(normalRadio);
         group.add(foilRadio);
+        group.add(surgeRadio);
         group.add(etchedRadio);
         finishPanel.add(normalRadio);
         finishPanel.add(foilRadio);
+        finishPanel.add(surgeRadio);
         finishPanel.add(etchedRadio);
 
         java.awt.event.ActionListener radioListener = e -> updateOfferDisplay();
         normalRadio.addActionListener(radioListener);
         foilRadio  .addActionListener(radioListener);
+        surgeRadio.addActionListener(radioListener);
         etchedRadio.addActionListener(radioListener);
 
         JPanel actionRow = new JPanel(new BorderLayout(8, 0));
@@ -249,6 +254,7 @@ public class PriceCheckDialog extends JDialog {
 
             @Override
             protected void done() {
+                if (activeWorker != this || isCancelled() || !isDisplayable()) return;
                 try {
                     Card card = get();
                     currentCard = card;
@@ -286,12 +292,15 @@ public class PriceCheckDialog extends JDialog {
         // Enable/disable radios based on available prices
         normalRadio.setEnabled(card.hasNormalPrice());
         foilRadio  .setEnabled(card.hasFoilPrice());
+        surgeRadio.setEnabled(card.hasFoilPrice());
         etchedRadio.setEnabled(card.hasEtchedPrice());
 
         // Select radio matching the initial finish from the parsed code
         if ("E".equals(initialFinish) && card.hasEtchedPrice()) {
             etchedRadio.setSelected(true);
-        } else if (("F".equals(initialFinish) || "S".equals(initialFinish)) && card.hasFoilPrice()) {
+        } else if ("S".equals(initialFinish) && card.hasFoilPrice()) {
+            surgeRadio.setSelected(true);
+        } else if ("F".equals(initialFinish) && card.hasFoilPrice()) {
             foilRadio.setSelected(true);
         } else if (card.hasNormalPrice()) {
             normalRadio.setSelected(true);
@@ -301,7 +310,7 @@ public class PriceCheckDialog extends JDialog {
             etchedRadio.setSelected(true);
         }
 
-        addButton.setEnabled(true);
+        addButton.setEnabled(card.hasNormalPrice() || card.hasFoilPrice() || card.hasEtchedPrice());
         statusLabel.setText(" ");
         statusLabel.setForeground(AppTheme.SUCCESS);
         updateOfferDisplay();
@@ -313,7 +322,7 @@ public class PriceCheckDialog extends JDialog {
         BigDecimal selectedPrice;
         if (etchedRadio.isSelected() && currentCard.hasEtchedPrice()) {
             selectedPrice = currentCard.getEtchedPriceAsBigDecimal();
-        } else if (foilRadio.isSelected() && currentCard.hasFoilPrice()) {
+        } else if ((foilRadio.isSelected() || surgeRadio.isSelected()) && currentCard.hasFoilPrice()) {
             selectedPrice = currentCard.getFoilPriceAsBigDecimal();
         } else if (currentCard.hasNormalPrice()) {
             selectedPrice = currentCard.getPriceAsBigDecimal();
@@ -329,6 +338,7 @@ public class PriceCheckDialog extends JDialog {
             return;
         }
 
+        selectedPrice = new com.cardpricer.service.PricingService().applyPricingRules(selectedPrice, currentCard.getRarity());
         BuyRateService.PayoutResult payout = buyRateService.computePayout(
                 currentCard.getSetCode(),
                 currentCard.getCollectorNumber(),
@@ -338,8 +348,8 @@ public class PriceCheckDialog extends JDialog {
         int creditPct = payout.appliedCreditRate().multiply(BigDecimal.valueOf(100)).intValue();
         int checkPct  = payout.appliedCheckRate() .multiply(BigDecimal.valueOf(100)).intValue();
 
-        creditOfferLabel.setText(String.format("$%.2f  (%d%%)", payout.creditPayout(), creditPct));
-        checkOfferLabel .setText(String.format("$%.2f  (%d%%)", payout.checkPayout(),  checkPct));
+        creditOfferLabel.setText(String.format(java.util.Locale.ROOT, "$%.2f  (%d%%)", payout.creditPayout(), creditPct));
+        checkOfferLabel .setText(String.format(java.util.Locale.ROOT, "$%.2f  (%d%%)", payout.checkPayout(),  checkPct));
     }
 
     private void doAddToTrade() {
@@ -348,6 +358,8 @@ public class PriceCheckDialog extends JDialog {
         String finish;
         if (etchedRadio.isSelected()) {
             finish = "E";
+        } else if (surgeRadio.isSelected()) {
+            finish = "S";
         } else if (foilRadio.isSelected()) {
             finish = "F";
         } else {
@@ -384,6 +396,7 @@ public class PriceCheckDialog extends JDialog {
         checkOfferLabel .setText("\u2014");
         normalRadio.setEnabled(true);
         foilRadio  .setEnabled(true);
+        surgeRadio.setEnabled(true);
         etchedRadio.setEnabled(true);
         normalRadio.setSelected(true);
         addButton.setEnabled(false);

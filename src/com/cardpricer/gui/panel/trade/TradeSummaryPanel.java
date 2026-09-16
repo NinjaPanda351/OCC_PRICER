@@ -1,106 +1,67 @@
 package com.cardpricer.gui.panel.trade;
 
 import com.cardpricer.util.AppTheme;
-
 import javax.swing.*;
 import java.awt.*;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 
-/**
- * Displays the running trade total and effective payout rates.
- *
- * <p>Rates are computed dynamically from the accumulated per-row tiered payouts
- * supplied by {@link com.cardpricer.service.BuyRateService}, rather than using
- * flat 50% / 33% constants.  Call {@link #update} after every table change.
- */
+/** Three stable metrics keep the offer readable without changing settlement calculations. */
 public class TradeSummaryPanel extends JPanel {
+    private final JLabel totalPriceLabel = new JLabel("$0.00");
+    private final JLabel creditPayoutLabel = new JLabel("$0.00");
+    private final JLabel checkPayoutLabel = new JLabel("$0.00");
+    private final JLabel cardCount = AppTheme.mutedLabel("0 cards in this trade");
+    private final JLabel creditRate = AppTheme.mutedLabel("Quoted credit offer");
+    private final JLabel checkRate = AppTheme.mutedLabel("Quoted check offer");
+    private String selectedPayment = "credit";
+    private final java.util.List<Metric> metrics = new java.util.ArrayList<>();
+    private boolean compact;
+    private record Metric(JPanel panel, JLabel title, JLabel amount, JLabel detail) {}
 
-    private final JLabel totalPriceLabel;
-    private final JLabel creditPayoutLabel;
-    private final JLabel checkPayoutLabel;
-
-    /** Constructs the summary panel and initialises all value labels to zero. */
     public TradeSummaryPanel() {
-        setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
-        setBorder(AppTheme.sectionBorder("Value Summary"));
-
-        totalPriceLabel = new JLabel("TOTAL: $0.00 (0 cards)");
-        totalPriceLabel.setFont(totalPriceLabel.getFont().deriveFont(Font.BOLD, 20f));
-        totalPriceLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        creditPayoutLabel = new JLabel("CREDIT PAYOUT (50%): $0.00");
-        creditPayoutLabel.setFont(creditPayoutLabel.getFont().deriveFont(Font.PLAIN, 14f));
-        creditPayoutLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        checkPayoutLabel = new JLabel("CHECK PAYOUT (33%): $0.00");
-        checkPayoutLabel.setFont(checkPayoutLabel.getFont().deriveFont(Font.PLAIN, 14f));
-        checkPayoutLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        add(totalPriceLabel);
-        add(Box.createVerticalStrut(8));
-        add(creditPayoutLabel);
-        add(Box.createVerticalStrut(5));
-        add(checkPayoutLabel);
+        super(new GridLayout(1, 3, 12, 0)); setOpaque(false);
+        add(metric("Market value", totalPriceLabel, cardCount));
+        add(metric("Store credit", creditPayoutLabel, creditRate));
+        add(metric("Check payout", checkPayoutLabel, checkRate));
     }
-
-    /**
-     * Refreshes all labels and highlights the rate that matches paymentType.
-     *
-     * @param total         total market value of all cards in the trade
-     * @param totalQty      total card count across all rows
-     * @param paymentType   "credit", "check", "inventory", or "partial"
-     * @param creditPayout  accumulated credit payout from tiered rules
-     * @param checkPayout   accumulated check payout from tiered rules
-     */
-    public void update(BigDecimal total, int totalQty, String paymentType,
-                       BigDecimal creditPayout, BigDecimal checkPayout) {
-        totalPriceLabel.setText(String.format("TOTAL: $%.2f (%d cards)", total, totalQty));
-
-        // Compute effective percentages for display
-        String creditPct = effectivePct(creditPayout, total);
-        String checkPct  = effectivePct(checkPayout,  total);
-
-        creditPayoutLabel.setText(String.format("CREDIT PAYOUT (%s%%): $%.2f", creditPct, creditPayout));
-        checkPayoutLabel.setText(String.format("CHECK PAYOUT (%s%%): $%.2f",  checkPct,  checkPayout));
-
-        highlightPaymentRate(paymentType);
-        revalidate();
+    private JPanel metric(String title, JLabel amount, JLabel detail) {
+        JPanel metric = AppTheme.surface(new BorderLayout(0, 2), 8);
+        JLabel titleLabel = AppTheme.mutedLabel(title);
+        metric.add(titleLabel, BorderLayout.NORTH);
+        amount.setFont(AppTheme.FONT_TITLE.deriveFont(20f));
+        metric.add(amount, BorderLayout.CENTER); metric.add(detail, BorderLayout.SOUTH);
+        metrics.add(new Metric(metric, titleLabel, amount, detail));
+        return metric;
     }
-
-    // -------------------------------------------------------------------------
-    // Private helpers
-    // -------------------------------------------------------------------------
-
-    /**
-     * Computes {@code payout / total * 100} as a display string, or returns the
-     * raw payout amount string when total is zero to avoid divide-by-zero.
-     */
-    private String effectivePct(BigDecimal payout, BigDecimal total) {
-        if (total.compareTo(BigDecimal.ZERO) == 0) {
-            return "—";
+    public void setCompact(boolean compact) {
+        if (this.compact == compact) return;
+        this.compact = compact;
+        for (Metric metric : metrics) {
+            metric.panel.removeAll(); metric.panel.setBorder(AppTheme.cardBorder(compact ? 6 : 8));
+            metric.panel.add(metric.title, compact ? BorderLayout.WEST : BorderLayout.NORTH);
+            metric.panel.add(metric.amount, compact ? BorderLayout.EAST : BorderLayout.CENTER);
+            if (!compact) metric.panel.add(metric.detail, BorderLayout.SOUTH);
         }
-        BigDecimal pct = payout.divide(total, 4, RoundingMode.HALF_UP)
-                               .multiply(new BigDecimal("100"))
-                               .setScale(1, RoundingMode.HALF_UP);
-        // Strip trailing ".0" for clean display (e.g. "50" not "50.0")
-        String s = pct.stripTrailingZeros().toPlainString();
-        return s;
+        revalidate(); repaint();
     }
-
-    private void highlightPaymentRate(String paymentType) {
-        // Reset both to normal
-        creditPayoutLabel.setFont(creditPayoutLabel.getFont().deriveFont(Font.PLAIN, 14f));
-        checkPayoutLabel.setFont(checkPayoutLabel.getFont().deriveFont(Font.PLAIN, 14f));
-        creditPayoutLabel.setForeground(UIManager.getColor("Label.foreground"));
-        checkPayoutLabel.setForeground(UIManager.getColor("Label.foreground"));
-
-        if ("credit".equals(paymentType)) {
-            creditPayoutLabel.setFont(creditPayoutLabel.getFont().deriveFont(Font.BOLD, 16f));
-            creditPayoutLabel.setForeground(AppTheme.SUCCESS);
-        } else if ("check".equals(paymentType)) {
-            checkPayoutLabel.setFont(checkPayoutLabel.getFont().deriveFont(Font.BOLD, 16f));
-            checkPayoutLabel.setForeground(AppTheme.SUCCESS);
-        }
+    public void update(BigDecimal total, int totalQty, String paymentType, BigDecimal creditPayout, BigDecimal checkPayout) {
+        totalPriceLabel.setText(money(total)); creditPayoutLabel.setText(money(creditPayout)); checkPayoutLabel.setText(money(checkPayout));
+        cardCount.setText(totalQty + (totalQty == 1 ? " card in this trade" : " cards in this trade"));
+        creditRate.setText(effectivePct(creditPayout, total) + " of market" + ("credit".equals(paymentType) ? "  ·  Selected" : ""));
+        checkRate.setText(effectivePct(checkPayout, total) + " of market" + ("check".equals(paymentType) ? "  ·  Selected" : ""));
+        for (Metric metric : metrics) metric.panel.setToolTipText(metric.title.getText() + ": " + metric.amount.getText() + " — " + metric.detail.getText());
+        selectedPayment = paymentType; updateColors(); revalidate();
+    }
+    @Override public void updateUI() { super.updateUI(); if (creditPayoutLabel != null) updateColors(); }
+    private void updateColors() {
+        Color normal = UIManager.getColor("Label.foreground");
+        creditPayoutLabel.setForeground("credit".equals(selectedPayment) ? AppTheme.accent() : normal);
+        checkPayoutLabel.setForeground("check".equals(selectedPayment) ? AppTheme.accent() : normal);
+    }
+    private static String money(BigDecimal value) { return "$" + value.setScale(2, RoundingMode.HALF_UP).toPlainString(); }
+    private static String effectivePct(BigDecimal payout, BigDecimal total) {
+        if (total.signum() == 0) return "—";
+        return payout.multiply(BigDecimal.valueOf(100)).divide(total, 1, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() + "%";
     }
 }

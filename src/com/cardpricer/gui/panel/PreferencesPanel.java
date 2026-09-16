@@ -81,6 +81,7 @@ public class PreferencesPanel extends JPanel {
     private static final Map<String, ThemeApplier> THEME_REGISTRY = new LinkedHashMap<>();
 
     static {
+        THEME_REGISTRY.put(com.cardpricer.util.MidnightLaf.NAME, com.cardpricer.util.MidnightLaf::setup);
         // Core FlatLaf themes
         THEME_REGISTRY.put("FlatLaf Dark",        FlatDarkLaf::setup);
         THEME_REGISTRY.put("FlatLaf Light",       FlatLightLaf::setup);
@@ -140,6 +141,7 @@ public class PreferencesPanel extends JPanel {
     private final BuyRateService buyRateService = new BuyRateService();
     private DefaultTableModel rulesTableModel;
     private JLabel buyRatesStatusLabel;
+    private JTable rulesTable;
     private DefaultTableModel bountyTableModel;
     private JTable bountyTable;
     private JLabel bountiesStatusLabel;
@@ -147,7 +149,7 @@ public class PreferencesPanel extends JPanel {
     /** Constructs the preferences panel and initialises the Appearance and Network tabs. */
     public PreferencesPanel() {
         setLayout(new BorderLayout(15, 15));
-        setBorder(new EmptyBorder(20, 20, 20, 20));
+        setBorder(new EmptyBorder(16, 20, 14, 20));
 
         add(createTopPanel(), BorderLayout.NORTH);
         add(createTabbedSettings(), BorderLayout.CENTER);
@@ -158,8 +160,8 @@ public class PreferencesPanel extends JPanel {
                 "Appearance, network & buy rates");
 
         JButton helpBtn = new JButton("?");
-        helpBtn.setFocusPainted(false);
-        helpBtn.setPreferredSize(new Dimension(34, 34));
+
+
         helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
         helpBtn.setToolTipText("Help");
         helpBtn.addActionListener(e ->
@@ -168,17 +170,19 @@ public class PreferencesPanel extends JPanel {
 
         JPanel panel = new JPanel(new BorderLayout(10, 0));
         panel.add(titlePanel, BorderLayout.CENTER);
-        panel.add(helpBtn,    BorderLayout.EAST);
+        JPanel headerActions = AppTheme.transparent(new com.cardpricer.gui.WrapLayout(FlowLayout.RIGHT, 0, 0));
+        headerActions.add(helpBtn);
+        panel.add(headerActions, BorderLayout.EAST);
 
         return panel;
     }
 
     private JTabbedPane createTabbedSettings() {
         JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("Appearance",   createAppearanceTab());
-        tabs.addTab("Network",      createNetworkTab());
-        tabs.addTab("Buy Rates",    createBuyRatesTab());
-        tabs.addTab("Card Catalog", createCatalogTab());
+        tabs.addTab("Appearance",   com.cardpricer.gui.ScrollablePage.wrap(createAppearanceTab()));
+        tabs.addTab("Network",      com.cardpricer.gui.ScrollablePage.wrap(createNetworkTab()));
+        tabs.addTab("Buy Rates",    com.cardpricer.gui.ScrollablePage.wrap(createBuyRatesTab()));
+        tabs.addTab("Card Catalog", com.cardpricer.gui.ScrollablePage.wrap(createCatalogTab()));
         return tabs;
     }
 
@@ -204,7 +208,7 @@ public class PreferencesPanel extends JPanel {
                 BorderFactory.createTitledBorder("Shared Trades Folder"),
                 new EmptyBorder(12, 12, 12, 12)
         ));
-        section.setMaximumSize(new Dimension(700, 180));
+        section.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(5, 5, 5, 5);
@@ -222,7 +226,7 @@ public class PreferencesPanel extends JPanel {
 
         gbc.gridx = 2; gbc.weightx = 0;
         JButton browseBtn = new JButton("Browse...");
-        browseBtn.setFocusPainted(false);
+
         browseBtn.addActionListener(e -> browseForSharedFolder());
         section.add(browseBtn, gbc);
 
@@ -235,14 +239,14 @@ public class PreferencesPanel extends JPanel {
 
         // Row 2: Test + Save buttons
         gbc.gridy = 2; gbc.gridwidth = 3;
-        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel btnRow = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 8, 0));
         btnRow.setOpaque(false);
 
         JButton saveBtn = AppTheme.primaryButton("Save");
         saveBtn.addActionListener(e -> saveSharedFolder());
 
         JButton testBtn = new JButton("Test Connection");
-        testBtn.setFocusPainted(false);
+
         testBtn.addActionListener(e -> testSharedFolder());
 
         btnRow.add(saveBtn);
@@ -363,15 +367,15 @@ public class PreferencesPanel extends JPanel {
             @Override
             public Class<?> getColumnClass(int col) { return String.class; }
         };
-        JTable rulesTable = new JTable(rulesTableModel);
+        rulesTable = new JTable(rulesTableModel);
         rulesTable.setRowHeight(24);
         rulesTable.getTableHeader().setReorderingAllowed(false);
-        JScrollPane rulesScroll = new JScrollPane(rulesTable);
+        JScrollPane rulesScroll = new com.cardpricer.gui.ResponsiveTableScroll(rulesTable, 110, 110, 110, 110);
         rulesScroll.setPreferredSize(new Dimension(500, 160));
         rulesSection.add(rulesScroll, BorderLayout.CENTER);
 
         // Buttons row
-        JPanel rulesBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel rulesBtns = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 8, 0));
 
         JButton addRowBtn = new JButton("Add Row");
         addRowBtn.addActionListener(e -> rulesTableModel.addRow(new String[]{"0.00", "50", "40"}));
@@ -401,6 +405,18 @@ public class PreferencesPanel extends JPanel {
         rulesBtns.add(addRowBtn);
         rulesBtns.add(removeRowBtn);
         rulesBtns.add(saveRulesBtn);
+        JButton reloadRates=new JButton("Reload saved rates");
+        reloadRates.addActionListener(e -> {
+            com.cardpricer.gui.BackgroundOperation.run(this, "Reloading rates", buyRateService::reload, () -> {
+                loadRulesIntoTable(); loadBountiesIntoTable(); buyRatesStatusLabel.setText(buyRateService.getSyncStatus());
+            });
+        });
+        rulesBtns.add(reloadRates);
+        JButton resolveRates = new JButton("Review shared rates…");
+        resolveRates.addActionListener(e -> com.cardpricer.gui.dialog.RateConflictDialog.show(this, buyRateService, () -> {
+            loadRulesIntoTable(); loadBountiesIntoTable(); buyRatesStatusLabel.setText(buyRateService.getSyncStatus());
+        }));
+        rulesBtns.add(resolveRates);
         rulesBtns.add(buyRatesStatusLabel);
         rulesSection.add(rulesBtns, BorderLayout.SOUTH);
 
@@ -413,7 +429,7 @@ public class PreferencesPanel extends JPanel {
         rulesSection.add(rulesHelp, BorderLayout.NORTH);
 
         rulesSection.setAlignmentX(Component.LEFT_ALIGNMENT);
-        rulesSection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 300));
+        rulesSection.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
         // --- Section 2: Bounty Cards ---
         JPanel bountySection = new JPanel(new BorderLayout(8, 8));
@@ -450,11 +466,11 @@ public class PreferencesPanel extends JPanel {
                 bountiesStatusLabel.setForeground(UIManager.getColor("Label.foreground"));
             }
         });
-        JScrollPane bountyScroll = new JScrollPane(bountyTable);
+        JScrollPane bountyScroll = new com.cardpricer.gui.ResponsiveTableScroll(bountyTable, 220, 110, 110);
         bountyScroll.setPreferredSize(new Dimension(500, 140));
         bountySection.add(bountyScroll, BorderLayout.CENTER);
 
-        JPanel bountyBtns = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel bountyBtns = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 8, 0));
         JButton addBountyBtn    = new JButton("Add Bounty");
         JButton removeBountyBtn = AppTheme.dangerButton("Remove Selected");
         JButton importCsvBtn    = new JButton("Import CSV");
@@ -493,7 +509,7 @@ public class PreferencesPanel extends JPanel {
         bountySection.add(bountyHelp, BorderLayout.NORTH);
 
         bountySection.setAlignmentX(Component.LEFT_ALIGNMENT);
-        bountySection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 300));
+        bountySection.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
         panel.add(rulesSection);
         panel.add(Box.createVerticalStrut(12));
@@ -524,6 +540,7 @@ public class PreferencesPanel extends JPanel {
 
     /** Reads the rules table, validates, and persists via BuyRateService. */
     private void saveRules() {
+        if (rulesTable.isEditing() && !rulesTable.getCellEditor().stopCellEditing()) return;
         List<BuyRateRule> newRules = new ArrayList<>();
         for (int i = 0; i < rulesTableModel.getRowCount(); i++) {
             try {
@@ -546,14 +563,10 @@ public class PreferencesPanel extends JPanel {
             }
         }
 
-        try {
-            buyRateService.saveRules(newRules);
-            buyRatesStatusLabel.setText("Saved!");
+        com.cardpricer.gui.BackgroundOperation.run(this, "Saving rates", () -> buyRateService.saveRules(newRules), () -> {
+            buyRatesStatusLabel.setText(buyRateService.getSyncStatus());
             buyRatesStatusLabel.setForeground(new Color(0, 150, 0));
-        } catch (IllegalArgumentException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(),
-                    "Validation Error", JOptionPane.ERROR_MESSAGE);
-        }
+        });
     }
 
     /** Populates the bounty table from the current BuyRateService state. */
@@ -729,6 +742,7 @@ public class PreferencesPanel extends JPanel {
 
     /** Reads the bounty table rows and persists them via BuyRateService. */
     private void saveBounties() {
+        if (bountyTable.isEditing() && !bountyTable.getCellEditor().stopCellEditing()) return;
         List<BountyCard> newBounties = new ArrayList<>();
         for (int i = 0; i < bountyTableModel.getRowCount(); i++) {
             try {
@@ -744,21 +758,23 @@ public class PreferencesPanel extends JPanel {
                     return;
                 }
                 newBounties.add(new BountyCard(name, credit, check));
-            } catch (NumberFormatException ex) {
+            } catch (IllegalArgumentException ex) {
                 JOptionPane.showMessageDialog(this,
-                        "Row " + (i + 1) + " contains invalid numbers. Please correct and try again.",
+                        "Row " + (i + 1) + ": " + ex.getMessage(),
                         "Invalid Input", JOptionPane.ERROR_MESSAGE);
                 return;
             }
         }
-        buyRateService.saveBounties(newBounties);
-        loadBountiesIntoTable();
-        bountiesStatusLabel.setText("Saved & sorted alphabetically.");
-        bountiesStatusLabel.setForeground(new Color(0, 150, 0));
+        com.cardpricer.gui.BackgroundOperation.run(this, "Saving bounties", () -> buyRateService.saveBounties(newBounties), () -> {
+            loadBountiesIntoTable();
+            bountiesStatusLabel.setText(buyRateService.getSyncStatus());
+            bountiesStatusLabel.setForeground(new Color(0, 150, 0));
+        });
     }
 
     /** Exports the current bounty table contents to a user-chosen CSV file. */
     private void exportBountiesCsv() {
+        if (bountyTable.isEditing() && !bountyTable.getCellEditor().stopCellEditing()) return;
         if (bountyTableModel.getRowCount() == 0) {
             JOptionPane.showMessageDialog(this, "No bounties to export.",
                     "Export CSV", JOptionPane.INFORMATION_MESSAGE);
@@ -776,16 +792,19 @@ public class PreferencesPanel extends JPanel {
             file = new File(file.getAbsolutePath() + ".csv");
         }
 
-        StringBuilder sb = new StringBuilder("CARD NAME,CREDIT PERCENT,CHECK PERCENT\n");
-        for (int i = 0; i < bountyTableModel.getRowCount(); i++) {
-            String name   = ((String) bountyTableModel.getValueAt(i, 0)).replace(",", ";");
-            String credit = (String) bountyTableModel.getValueAt(i, 1);
-            String check  = (String) bountyTableModel.getValueAt(i, 2);
-            sb.append(name).append(',').append(credit).append(',').append(check).append('\n');
-        }
-
         try {
-            Files.writeString(file.toPath(), sb.toString(), java.nio.charset.StandardCharsets.UTF_8);
+            List<BountyCard> bounties = new ArrayList<>();
+            for (int i = 0; i < bountyTableModel.getRowCount(); i++) {
+                try {
+                    String name = ((String) bountyTableModel.getValueAt(i, 0)).trim();
+                    BigDecimal credit = new BigDecimal(((String) bountyTableModel.getValueAt(i, 1)).trim()).movePointLeft(2);
+                    BigDecimal check = new BigDecimal(((String) bountyTableModel.getValueAt(i, 2)).trim()).movePointLeft(2);
+                    bounties.add(new BountyCard(name, credit, check));
+                } catch (IllegalArgumentException ex) {
+                    throw new IOException("Invalid bounty in row " + (i + 1) + ": " + ex.getMessage(), ex);
+                }
+            }
+            buyRateService.exportBountyCsv(file, bounties);
             bountiesStatusLabel.setText("Exported to " + file.getName());
             bountiesStatusLabel.setForeground(new Color(0, 150, 0));
         } catch (IOException ex) {
@@ -808,7 +827,7 @@ public class PreferencesPanel extends JPanel {
         statusSection.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createTitledBorder("Catalog Status"),
                 new EmptyBorder(10, 12, 10, 12)));
-        statusSection.setMaximumSize(new Dimension(Integer.MAX_VALUE, 140));
+        statusSection.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
         statusSection.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         GridBagConstraints gbc = new GridBagConstraints();
@@ -844,14 +863,14 @@ public class PreferencesPanel extends JPanel {
         panel.add(Box.createVerticalStrut(12));
 
         // ── Buttons row ───────────────────────────────────────────────────────
-        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel btnRow = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 8, 0));
         btnRow.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         downloadCatalogBtn = AppTheme.primaryButton("Download / Refresh Catalog");
         downloadCatalogBtn.addActionListener(e -> startCatalogDownload());
 
         loadCatalogBtn = new JButton("Load into Memory");
-        loadCatalogBtn.setFocusPainted(false);
+
         loadCatalogBtn.addActionListener(e -> startCatalogLoad());
 
         btnRow.add(downloadCatalogBtn);
@@ -890,6 +909,10 @@ public class PreferencesPanel extends JPanel {
             catalogStatusLabel.setText("Loaded in memory \u2014 "
                     + String.format("%,d", catalog.getCardCount()) + " cards");
             catalogStatusLabel.setForeground(AppTheme.SUCCESS);
+            if (catalog.getAmbiguousLegacyKeys() > 0) {
+                catalogStatusLabel.setText(catalogStatusLabel.getText() + "; " + catalog.getAmbiguousLegacyKeys() + " ambiguous legacy codes need online lookup or refresh");
+                catalogStatusLabel.setForeground(AppTheme.DANGER);
+            }
         } else if (catalog.isCatalogAvailable()) {
             catalogStatusLabel.setText("Available on disk \u2014 not yet loaded into memory");
             catalogStatusLabel.setForeground(UIManager.getColor("Label.foreground"));
@@ -1020,56 +1043,33 @@ public class PreferencesPanel extends JPanel {
     }
 
     private JPanel createThemeSection() {
-        JPanel section = new JPanel(new BorderLayout(10, 10));
-        section.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("Appearance"),
-                new EmptyBorder(15, 15, 15, 15)
-        ));
-        section.setMaximumSize(new Dimension(600, 150));
-
-        JPanel content = new JPanel(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(5, 5, 5, 5);
-        gbc.anchor = GridBagConstraints.WEST;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-
-        // Theme selection
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.weightx = 0;
-        JLabel themeLabel = new JLabel("Theme:");
-        content.add(themeLabel, gbc);
-
-        gbc.gridx = 1;
-        gbc.weightx = 1.0;
-        themeCombo = new JComboBox<>(THEMES);
-        themeCombo.setPreferredSize(new Dimension(250, 32));
-
-        // Load saved theme
-        String savedTheme = prefs.get(THEME_KEY, "FlatLaf Dark");
-        themeCombo.setSelectedItem(savedTheme);
-
-        content.add(themeCombo, gbc);
-
-        gbc.gridx = 2;
-        gbc.weightx = 0;
-        applyButton = AppTheme.primaryButton("Apply");
-        applyButton.setPreferredSize(new Dimension(100, 32));
-        applyButton.addActionListener(e -> applyTheme());
-        content.add(applyButton, gbc);
-
-        // Info label
-        gbc.gridx = 0;
-        gbc.gridy = 1;
-        gbc.gridwidth = 3;
-        gbc.weightx = 1.0;
-        JLabel infoLabel = new JLabel("Theme will be applied instantly to all windows");
-        infoLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
-        infoLabel.setFont(infoLabel.getFont().deriveFont(Font.ITALIC, 11f));
-        content.add(infoLabel, gbc);
-
-        section.add(content, BorderLayout.CENTER);
-
+        JPanel section = AppTheme.surface(new BorderLayout(0, 22), 24);
+        section.setMaximumSize(new Dimension(Integer.MAX_VALUE, 270));
+        section.setPreferredSize(new Dimension(750, 270));
+        JPanel heading = AppTheme.transparent(new BorderLayout(20, 0));
+        JPanel copy = AppTheme.transparent(new GridLayout(3, 1, 0, 7));
+        JLabel title = new JLabel("Make it your workspace"); title.setFont(AppTheme.FONT_HEADING.deriveFont(20f));
+        copy.add(title);
+        copy.add(AppTheme.mutedLabel("OCC Midnight pairs charcoal surfaces with subtle blue accents."));
+        copy.add(AppTheme.mutedLabel("Choose a look that feels comfortable through a full day at the counter."));
+        heading.add(copy, BorderLayout.CENTER);
+        JPanel palette = AppTheme.transparent(new GridLayout(1, 4, 5, 0));
+        for (int hex : new int[]{0x111720, 0x192230, 0x4266AE, 0x83A9F4}) {
+            JPanel swatch = new JPanel(); swatch.setBackground(new Color(hex));
+            swatch.setPreferredSize(new Dimension(22, 28)); palette.add(swatch);
+        }
+        JPanel colors = AppTheme.transparent(new com.cardpricer.gui.WrapLayout(FlowLayout.RIGHT, 0, 0)); colors.add(palette); heading.add(colors, BorderLayout.EAST);
+        section.add(heading, BorderLayout.NORTH);
+        JPanel selection = AppTheme.transparent(new BorderLayout(12, 8));
+        JLabel label = AppTheme.mutedLabel("Application theme");
+        themeCombo = new JComboBox<>(THEMES); label.setLabelFor(themeCombo);
+        themeCombo.setSelectedItem(getSavedTheme());
+        selection.add(label, BorderLayout.NORTH); selection.add(themeCombo, BorderLayout.CENTER);
+        applyButton = AppTheme.primaryButton("Apply theme"); applyButton.addActionListener(e -> applyTheme());
+        JPanel apply = AppTheme.transparent(new BorderLayout()); apply.add(applyButton, BorderLayout.SOUTH);
+        selection.add(apply, BorderLayout.EAST);
+        section.add(selection, BorderLayout.CENTER);
+        section.add(AppTheme.mutedLabel("Applies to all open windows. Your choice is remembered for next time."), BorderLayout.SOUTH);
         return section;
     }
 
@@ -1105,12 +1105,12 @@ public class PreferencesPanel extends JPanel {
     }
 
     /**
-     * Returns the persisted theme display name, defaulting to {@code "FlatLaf Dark"}.
+     * Returns the persisted theme display name, defaulting to OCC Midnight.
      *
      * @return saved theme name
      */
     public static String getSavedTheme() {
-        return prefs.get(THEME_KEY, "FlatLaf Dark");
+        return prefs.get(THEME_KEY, com.cardpricer.util.MidnightLaf.NAME);
     }
 
     /**
@@ -1120,24 +1120,32 @@ public class PreferencesPanel extends JPanel {
      */
     public static void applySavedTheme() {
         String theme = getSavedTheme();
+        if (!prefs.getBoolean("app.midnight.migrated", false)) {
+            if ("FlatLaf Dark".equals(theme)) {
+                theme = com.cardpricer.util.MidnightLaf.NAME;
+                prefs.put(THEME_KEY, theme);
+            }
+            prefs.putBoolean("app.midnight.migrated", true);
+        }
         applyThemeByName(theme);
     }
 
     /**
      * Applies a theme by name using {@link #THEME_REGISTRY}.
-     * Falls back to FlatLaf Dark if the requested theme is not found or fails to load.
+     * Falls back to OCC Midnight if the requested theme is not found or fails to load.
      *
      * @param themeName display name of the theme to apply
      */
     public static void applyThemeByName(String themeName) {
-        ThemeApplier applier = THEME_REGISTRY.getOrDefault(themeName, FlatDarkLaf::setup);
+        ThemeApplier applier = THEME_REGISTRY.getOrDefault(themeName, com.cardpricer.util.MidnightLaf::setup);
         try {
             applier.apply();
         } catch (Exception e) {
             // Fallback to dark theme if the selected theme is not available
             System.err.println("Failed to apply theme '" + themeName + "': " + e.getMessage());
             System.err.println("Note: IntelliJ themes require flatlaf-intellij-themes.jar in classpath");
-            FlatDarkLaf.setup();
+            com.cardpricer.util.MidnightLaf.setup();
         }
+        AppTheme.applyFlatLafTweaks();
     }
 }

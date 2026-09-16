@@ -15,9 +15,9 @@ import java.util.List;
 /**
  * Manages autosave of in-progress trade sessions to disk for crash recovery.
  *
- * <p>The session file lives at {@code %APPDATA%\OCC_Trade_Pricer\session\autosave.json}.
- * It is written every 60 seconds by {@link com.cardpricer.gui.panel.TradePanel}
- * and deleted on a successful save or manual clear.
+ * <p>Typed drafts live in {@code session/draft-v1.json} and the local ledger.
+ * Edits debounce saves for two seconds; orderly close flushes the save queue.
+ * The legacy autosave adapter retains a hash-named backup before recovery.
  */
 public class TradeSessionService {
 
@@ -53,6 +53,40 @@ public class TradeSessionService {
     // Public API
     // -------------------------------------------------------------------------
 
+    private static final java.util.concurrent.ExecutorService SAVES=java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread thread=new Thread(r,"draft-save"); thread.setDaemon(true); return thread;
+    });
+    private static volatile RuntimeException saveFailure;
+    public static void queueDraft(com.cardpricer.model.TradeDraft draft) {
+        queueDraft(draft,null);
+    }
+    public static void queueDraft(com.cardpricer.model.TradeDraft draft, Long editingRevision) {
+        SAVES.submit(() -> { try { saveDraft(draft,editingRevision); saveFailure=null; } catch (RuntimeException e) { saveFailure=e; } });
+    }
+    public static void flush() {
+        try { SAVES.submit(() -> {}).get(10,java.util.concurrent.TimeUnit.SECONDS); }
+        catch (Exception e) { throw new IllegalStateException("Draft save did not finish",e); }
+        if (saveFailure!=null) throw saveFailure;
+    }
+    private static Path draftPath() { return autosavePath().resolveSibling("draft-v1.json"); }
+    public static boolean hasTypedDraft() { return Files.exists(draftPath()); }
+    public static com.cardpricer.model.TradeDraft loadDraft() throws java.io.IOException {
+        return com.cardpricer.model.TradeDraft.fromJson(new JSONObject(Files.readString(draftPath())));
+    }
+    public static void saveDraft(com.cardpricer.model.TradeDraft draft) {
+        saveDraft(draft,null);
+    }
+    public static Long loadEditingRevision() throws java.io.IOException {
+        var json=new JSONObject(Files.readString(draftPath()));
+        return json.has("editingRevision") ? json.getLong("editingRevision") : null;
+    }
+    public static void saveDraft(com.cardpricer.model.TradeDraft draft, Long editingRevision) {
+        try {
+            com.cardpricer.util.AtomicFiles.write(draftPath(), draft.toJson().put("editingRevision",editingRevision).toString());
+            new TradeRepository(AppDataDirectory.root().toPath().resolve("ledger/trades.sqlite")).saveDraft(draft);
+        }
+        catch (java.io.IOException | java.sql.SQLException e) { throw new IllegalStateException("Could not save the draft",e); }
+    }
     /** Returns {@code true} if an autosave file exists. */
     public static boolean hasAutosave() {
         return Files.exists(autosavePath());
@@ -60,9 +94,15 @@ public class TradeSessionService {
 
     /** Deletes the autosave file if it exists. */
     public static void clearAutosave() {
+        flush();
         try {
+            if (Files.exists(draftPath())) {
+                var draft=loadDraft();
+                new TradeRepository(AppDataDirectory.root().toPath().resolve("ledger/trades.sqlite")).deleteDraft(draft.id());
+            }
             Files.deleteIfExists(autosavePath());
-        } catch (Exception ignored) {}
+            Files.deleteIfExists(draftPath());
+        } catch (Exception failure) { throw new IllegalStateException("Could not clear recovery state",failure); }
     }
 
     /**
@@ -92,7 +132,7 @@ public class TradeSessionService {
 
             Path path = autosavePath();
             Files.createDirectories(path.getParent());
-            Files.writeString(path, root.toString(), StandardCharsets.UTF_8);
+            com.cardpricer.util.AtomicFiles.write(path, root.toString());
         } catch (Exception ignored) {
             // Never crash the app over an autosave failure
         }
@@ -107,6 +147,8 @@ public class TradeSessionService {
     public static SavedSession load() {
         try {
             String content = Files.readString(autosavePath(), StandardCharsets.UTF_8);
+            Path backup = autosavePath().resolveSibling("legacy-autosave-" + com.cardpricer.util.AtomicFiles.hash(content.getBytes(StandardCharsets.UTF_8)) + ".json");
+            if (!Files.exists(backup)) com.cardpricer.util.AtomicFiles.write(backup, content);
             JSONObject root = new JSONObject(content);
             String traderName   = root.optString("traderName",   "");
             String customerName = root.optString("customerName", "");

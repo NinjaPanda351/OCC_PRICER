@@ -20,6 +20,32 @@ public class Card {
     private String myArtist;
     private String myImageUrl;
     private boolean reserved;
+    private String providerId = "";
+    private String priceObservedAt = "unknown";
+    public String getPriceObservedAt() { return priceObservedAt; }
+    public void setPriceObservedAt(String timestamp) { priceObservedAt=timestamp; }
+    private String language = "en";
+    private String facesJson;
+    private List<String> finishes = List.of();
+
+    public String getProviderId() { return providerId; }
+    public void setProviderId(String value) { providerId = value; }
+    public String getLanguage() { return language; }
+    public void setLanguage(String value) { language = value; }
+    public String getFacesJson() { return facesJson; }
+    public void setFacesJson(String value) { facesJson = value; }
+    public List<String> getFinishes() { return finishes; }
+    public void setFinishes(List<String> value) { finishes = List.copyOf(value); }
+    public PrintingIdentity identity() { return new PrintingIdentity(providerId, mySetCode, myCollectorNumber, language); }
+    public Card copy() {
+        Card card = new Card(myName, mySetCode, myCollectorNumber);
+        card.myRarity = myRarity; card.myPrice = myPrice; card.myFoilPrice = myFoilPrice;
+        card.myEtchedPrice = myEtchedPrice; card.myFrameEffects = new ArrayList<>(myFrameEffects);
+        card.myArtist = myArtist; card.myImageUrl = myImageUrl; card.reserved = reserved;
+        card.providerId = providerId; card.language = language; card.facesJson = facesJson; card.finishes = finishes;
+        card.priceObservedAt=priceObservedAt;
+        return card;
+    }
 
     /** Constructs a Card with all price fields defaulting to {@code "N/A"}. */
     public Card() {

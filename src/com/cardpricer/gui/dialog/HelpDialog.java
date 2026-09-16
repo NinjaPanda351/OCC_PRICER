@@ -1,14 +1,13 @@
 package com.cardpricer.gui.dialog;
 
-import com.cardpricer.service.HelpEmailService;
+import com.cardpricer.service.BugReportService;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 
 /**
- * Modal dialog that lets users submit a bug report or feature request
- * to the development team without opening an external email client.
+ * Prepares a report that the user reviews and sends from their email application.
  */
 public final class HelpDialog extends JDialog {
 
@@ -30,10 +29,10 @@ public final class HelpDialog extends JDialog {
         content.setBorder(new EmptyBorder(18, 18, 18, 18));
 
         // Header
-        JLabel header = new JLabel("Submit a Bug Report");
+        JLabel header = new JLabel("Prepare a Bug Report");
         header.setFont(header.getFont().deriveFont(Font.BOLD, 14f));
 
-        JLabel sub = new JLabel("Describe the issue or feature request and it will be sent to the development team.");
+        JLabel sub = new JLabel("Review and send in your email app, or copy the report to " + BugReportService.RECIPIENT + ".");
         sub.setFont(sub.getFont().deriveFont(11f));
         sub.setForeground(UIManager.getColor("Label.disabledForeground"));
 
@@ -72,9 +71,22 @@ public final class HelpDialog extends JDialog {
         statusLabel.setFont(statusLabel.getFont().deriveFont(11f));
 
         // Buttons
-        sendBtn = new JButton("Send");
+        sendBtn = new JButton("Open Email Draft");
         sendBtn.putClientProperty("JButton.buttonType", "roundRect");
-        sendBtn.addActionListener(e -> sendEmail());
+        sendBtn.addActionListener(e -> openEmailDraft());
+
+        JButton copyBtn = new JButton("Copy Report");
+        copyBtn.addActionListener(e -> {
+            try {
+                String report = "To: " + BugReportService.RECIPIENT + "\nSubject: "
+                        + subjectField.getText() + "\n\n" + bodyArea.getText();
+                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+                        new java.awt.datatransfer.StringSelection(report), null);
+                statusLabel.setText("Copied. Paste into your email app.");
+            } catch (IllegalStateException ex) {
+                statusLabel.setText("Clipboard unavailable. Select and copy the message.");
+            }
+        });
 
         JButton cancelBtn = new JButton("Cancel");
         cancelBtn.putClientProperty("JButton.buttonType", "roundRect");
@@ -84,6 +96,7 @@ public final class HelpDialog extends JDialog {
         btnPanel.add(statusLabel, BorderLayout.WEST);
         JPanel btnRight = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         btnRight.add(cancelBtn);
+        btnRight.add(copyBtn);
         btnRight.add(sendBtn);
         btnPanel.add(btnRight, BorderLayout.EAST);
 
@@ -98,7 +111,7 @@ public final class HelpDialog extends JDialog {
         SwingUtilities.invokeLater(subjectField::requestFocusInWindow);
     }
 
-    private void sendEmail() {
+    private void openEmailDraft() {
         String subject = subjectField.getText().trim();
         String body    = bodyArea.getText().trim();
 
@@ -115,18 +128,18 @@ public final class HelpDialog extends JDialog {
             return;
         }
 
-        // Disable UI while sending
+        // Keep the report available while the email application opens.
         sendBtn.setEnabled(false);
         subjectField.setEnabled(false);
         bodyArea.setEnabled(false);
         statusLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
-        statusLabel.setText("Sending…");
+        statusLabel.setText("Opening email app…");
 
-        // Send on a background thread so the EDT stays responsive
+        // Opening an external application must not block the EDT.
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
             @Override
             protected Void doInBackground() throws Exception {
-                HelpEmailService.send(subject, body);
+                BugReportService.openDraft(subject, body);
                 return null;
             }
 
@@ -135,13 +148,14 @@ public final class HelpDialog extends JDialog {
                 try {
                     get(); // rethrow any exception
                     JOptionPane.showMessageDialog(HelpDialog.this,
-                            "Report submitted. You will be contacted if additional information is needed.",
-                            "Sent", JOptionPane.INFORMATION_MESSAGE);
-                    dispose();
+                            "Draft opened. Review and send it in your email app.\n"
+                                    + "If the draft did not appear, use Copy Report.",
+                            "Email Draft", JOptionPane.INFORMATION_MESSAGE);
+                    statusLabel.setText("Review and send in your email app.");
                 } catch (Exception ex) {
-                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
                     statusLabel.setForeground(Color.RED);
-                    statusLabel.setText("Error: " + cause.getMessage());
+                    statusLabel.setText("Could not open email. Use Copy Report.");
+                } finally {
                     sendBtn.setEnabled(true);
                     subjectField.setEnabled(true);
                     bodyArea.setEnabled(true);

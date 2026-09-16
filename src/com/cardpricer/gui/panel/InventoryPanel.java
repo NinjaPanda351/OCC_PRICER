@@ -1,4 +1,5 @@
 package com.cardpricer.gui.panel;
+import com.cardpricer.util.AppTheme;
 
 import com.cardpricer.exception.ScryfallApiException;
 import com.cardpricer.gui.ShortcutHelpDialog;
@@ -41,6 +42,8 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
 
     // UI Components
     private JComboBox<String> setComboBox;
+    private String loadedSet;
+    private boolean loading;
     private JButton loadSetButton;
     private JTable cardTable;
     private DefaultTableModel tableModel;
@@ -59,7 +62,7 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
         this.quantities = new ArrayList<>();
 
         setLayout(new BorderLayout(15, 15));
-        setBorder(new EmptyBorder(20, 20, 20, 20));
+        setBorder(new EmptyBorder(16, 20, 14, 20));
 
         add(createTopPanel(), BorderLayout.NORTH);
         add(createTablePanel(), BorderLayout.CENTER);
@@ -70,24 +73,11 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
         // Title section
-        JPanel titlePanel = new JPanel();
-        titlePanel.setLayout(new BoxLayout(titlePanel, BoxLayout.Y_AXIS));
-
-        JLabel title = new JLabel("Inventory Update");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 24f));
-        title.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel subtitle = new JLabel("Select a set and update card quantities for inventory");
-        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
-        subtitle.setForeground(UIManager.getColor("Label.disabledForeground"));
-
-        titlePanel.add(title);
-        titlePanel.add(Box.createVerticalStrut(4));
-        titlePanel.add(subtitle);
+        JPanel titlePanel = AppTheme.panelHeader("Inventory", "Update stock quantities for each printing and finish.");
 
         JButton helpBtn = new JButton("?");
-        helpBtn.setFocusPainted(false);
-        helpBtn.setPreferredSize(new Dimension(34, 34));
+
+
         helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
         helpBtn.setToolTipText("Help");
         helpBtn.addActionListener(e ->
@@ -96,16 +86,14 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
 
         JPanel titleRow = new JPanel(new BorderLayout(10, 0));
         titleRow.add(titlePanel, BorderLayout.CENTER);
-        titleRow.add(helpBtn,    BorderLayout.EAST);
+        JPanel headerActions = AppTheme.transparent(new com.cardpricer.gui.WrapLayout(FlowLayout.RIGHT, 0, 0));
+        headerActions.add(helpBtn);
+        titleRow.add(headerActions, BorderLayout.EAST);
 
         panel.add(titleRow, BorderLayout.NORTH);
 
         // Set selection section
-        JPanel selectionPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
-        selectionPanel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("Set Selection"),
-                new EmptyBorder(10, 10, 10, 10)
-        ));
+        JPanel selectionPanel = AppTheme.surface(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 12, 0), 16);
 
         JLabel setLabel = new JLabel("Select Set:");
 
@@ -114,9 +102,9 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
         setComboBox = new JComboBox<>(sets);
         setComboBox.setPreferredSize(new Dimension(150, 32));
 
-        loadSetButton = new JButton("Load Set Cards");
-        loadSetButton.setFocusPainted(false);
-        loadSetButton.setPreferredSize(new Dimension(140, 32));
+        loadSetButton = AppTheme.primaryButton("Load set cards");
+
+
         loadSetButton.addActionListener(e -> loadSet());
 
         selectionPanel.add(setLabel);
@@ -146,25 +134,25 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
         // Table columns: Code, Card Name, Normal Price, Foil Price, Normal Qty, Foil Qty
-        String[] columns = {"Code", "Card Name", "Normal Price", "Foil Price", "Normal Qty", "Foil Qty"};
+        String[] columns = {"Code", "Card Name", "Normal Price", "Foil Price", "Normal Qty", "Foil Qty", "Etched Price", "Etched Qty"};
         tableModel = new DefaultTableModel(columns, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
-                return column == 4 || column == 5; // Only quantity columns are editable
+                return column == 4 || column == 5 || column == 7; // Only quantity columns are editable
             }
 
             @Override
             public Class<?> getColumnClass(int column) {
-                if (column == 4 || column == 5) {
+                if (column == 4 || column == 5 || column == 7) {
                     return Integer.class; // Quantity columns
                 }
                 return super.getColumnClass(column);
             }
         };
 
-        cardTable = new JTable(tableModel);
+        cardTable = new com.cardpricer.gui.EmptyStateTable(tableModel, "Bring your inventory into view", "Choose a set above to load its cards and update quantities.");
         cardTable.setFont(cardTable.getFont().deriveFont(14f));
-        cardTable.setRowHeight(28);
+        AppTheme.styleTable(cardTable);
         cardTable.getColumnModel().getColumn(0).setPreferredWidth(100); // Code
         cardTable.getColumnModel().getColumn(1).setPreferredWidth(300); // Card Name
         cardTable.getColumnModel().getColumn(2).setPreferredWidth(100); // Normal Price
@@ -227,13 +215,15 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
         };
 
         cardTable.getColumnModel().getColumn(4).setCellEditor(quantityEditor); // Normal Qty
+        cardTable.getColumnModel().getColumn(7).setCellEditor(quantityEditor);
         cardTable.getColumnModel().getColumn(5).setCellEditor(quantityEditor); // Foil Qty
 
         // Enable table sorting
         cardTable.setAutoCreateRowSorter(true);
 
-        JScrollPane scrollPane = new JScrollPane(cardTable);
-        scrollPane.setBorder(BorderFactory.createTitledBorder("Set Cards (Click column headers to sort)"));
+        JScrollPane scrollPane = new com.cardpricer.gui.ResponsiveTableScroll(cardTable, 88, 190, 100, 100, 86, 86, 100, 86);
+        scrollPane.setColumnHeaderView(cardTable.getTableHeader());
+        scrollPane.setBorder(AppTheme.cardBorder(0));
 
         panel.add(scrollPane, BorderLayout.CENTER);
 
@@ -248,17 +238,17 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
         panel.add(leftPanel, BorderLayout.WEST);
 
         // Right: Action buttons
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 5));
+        JPanel buttonPanel = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.RIGHT, 10, 5));
 
         clearQuantitiesButton = new JButton("Clear All Quantities");
-        clearQuantitiesButton.setFocusPainted(false);
-        clearQuantitiesButton.setPreferredSize(new Dimension(160, 36));
+
+
         clearQuantitiesButton.addActionListener(e -> clearAllQuantities());
         clearQuantitiesButton.setEnabled(false);
 
-        exportButton = new JButton("Export Inventory");
-        exportButton.setFocusPainted(false);
-        exportButton.setPreferredSize(new Dimension(140, 36));
+        exportButton = AppTheme.primaryButton("Export inventory");
+
+
         exportButton.addActionListener(e -> exportInventory());
         exportButton.setEnabled(false);
 
@@ -276,7 +266,10 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
      */
     @Override
     public boolean isSafeToUnload() {
-        return loadedCards == null || loadedCards.isEmpty();
+        if (loading) return false;
+        for (int row=0;row<tableModel.getRowCount();row++)
+            if (!"0".equals(tableModel.getValueAt(row,4).toString()) || !"0".equals(tableModel.getValueAt(row,5).toString()) || !"0".equals(tableModel.getValueAt(row,7).toString())) return false;
+        return true;
     }
 
     private void loadSet() {
@@ -285,10 +278,10 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
             return;
         }
 
-        // Clear existing data
-        tableModel.setRowCount(0);
-        loadedCards.clear();
-        quantities.clear();
+        if (!isSafeToUnload() && JOptionPane.showConfirmDialog(this,"Discard current inventory edits and load another set?",
+                "Unsaved inventory",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION) return;
+        loading=true;
+        setComboBox.setEnabled(false);
 
         // Disable buttons during load
         loadSetButton.setEnabled(false);
@@ -310,6 +303,8 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
             protected void done() {
                 try {
                     List<Card> cards = get();
+                    tableModel.setRowCount(0); quantities.clear();
+                    loadedSet=selectedSet;
                     loadedCards = cards;
                     populateTable(cards);
 
@@ -323,6 +318,8 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
                             JOptionPane.ERROR_MESSAGE);
                     statusLabel.setText("Failed to load set");
                 } finally {
+                    loading=false; setComboBox.setEnabled(true);
+                    exportButton.setEnabled(!loadedCards.isEmpty()); clearQuantitiesButton.setEnabled(!loadedCards.isEmpty());
                     progressBar.setVisible(false);
                     loadSetButton.setEnabled(true);
                 }
@@ -345,7 +342,9 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
                     normalPrice,
                     foilPrice,
                     0, // Normal quantity default
-                    0  // Foil quantity default
+                    0,  // Foil quantity default
+                    card.hasEtchedPrice() ? "$"+card.getEtchedPrice() : "N/A",
+                    0
             });
 
             // Initialize quantity tracking (normal and foil per card)
@@ -363,6 +362,7 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
         if (confirm == JOptionPane.YES_OPTION) {
             for (int i = 0; i < tableModel.getRowCount(); i++) {
                 tableModel.setValueAt(0, i, 4); // Normal qty
+                tableModel.setValueAt(0, i, 7);
                 tableModel.setValueAt(0, i, 5); // Foil qty
             }
             statusLabel.setText("All quantities cleared");
@@ -381,7 +381,10 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
         String selectedSet = (String) setComboBox.getSelectedItem();
 
         try {
-            String filename = exportToChangeQtyFormat(selectedSet);
+            if (cardTable.isEditing() && !cardTable.getCellEditor().stopCellEditing()) return;
+            if (JOptionPane.showConfirmDialog(this,"Snapshot export includes zero quantities for untouched rows. Continue?",
+                    "Inventory snapshot",JOptionPane.YES_NO_OPTION)!=JOptionPane.YES_OPTION) return;
+            String filename = exportToChangeQtyFormat(loadedSet);
 
             int totalCards = 0;
             for (int i = 0; i < tableModel.getRowCount(); i++) {
@@ -409,64 +412,31 @@ public class InventoryPanel extends JPanel implements ManagedPanel {
     }
 
     private String exportToChangeQtyFormat(String setCode) throws IOException {
-        ensureDataDirectoryExists();
-
-        String timestamp = java.time.LocalDateTime.now().format(
-                java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-        String filename = String.format("%s/inventory_%s_%s.csv",
-                DATA_DIRECTORY, setCode, timestamp);
-
-        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
-            // No header for Item Wizard Change Qty format
-
-            for (int i = 0; i < tableModel.getRowCount(); i++) {
-                Card card = loadedCards.get(i);
-                int normalQty = getQuantity(i, 4);
-                int foilQty = getQuantity(i, 5);
-
-                // Always export normal version (even if quantity is 0)
-                if (card.hasNormalPrice()) {
-                    String code = card.getSetCode() + " " + card.getCollectorNumber();
-                    String cardName = card.getName();
-                    String artist = card.getArtist() != null ? card.getArtist() : "";
-
-                    writer.println(formatChangeQtyRow(code, cardName, artist, normalQty));
-                }
-
-                // Always export foil version (even if quantity is 0)
-                if (card.hasFoilPrice()) {
-                    String code = card.getSetCode() + " " + card.getCollectorNumber() + "F";
-                    String cardName = card.getName();
-                    String artist = card.getArtist() != null ? card.getArtist() : "";
-
-                    writer.println(formatChangeQtyRow(code, cardName, artist, foilQty));
-                }
+        java.io.StringWriter content=new java.io.StringWriter();
+        for (int row=0;row<tableModel.getRowCount();row++) {
+            Card card=loadedCards.get(row);
+            int[] counts={getQuantity(row,4),getQuantity(row,5),getQuantity(row,7)};
+            boolean[] available={card.hasNormalPrice(),card.hasFoilPrice(),card.hasEtchedPrice()};
+            String[] finishes={"","F","E"};
+            for (int i=0;i<counts.length;i++) {
+                if (counts[i]<0) throw new IllegalArgumentException("Quantity must be non-negative");
+                if (available[i]) com.cardpricer.service.CsvRows.write(content,
+                        com.cardpricer.util.SetList.fromScryfallCode(card.getSetCode())+" "+card.getCollectorNumber()+finishes[i],
+                        card.getName(),card.getArtist(),"",counts[i]);
             }
         }
-
-        return filename;
+        java.nio.file.Path file=java.nio.file.Path.of(DATA_DIRECTORY).resolve("inventory_"+setCode+"_"+java.util.UUID.randomUUID()+".csv");
+        com.cardpricer.util.AtomicFiles.write(file,content.toString());
+        return file.toString();
     }
 
     /**
      * Formats a row for Item Wizard Change Qty format
      * Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
      */
-    private String formatChangeQtyRow(String code, String cardName, String artist, int newQty) {
-        // Escape and quote card name if needed
-        String escapedName = cardName.replace("\"", "\"\"");
-        String description = escapedName.contains(",") ? "\"" + escapedName + "\"" : escapedName;
-
-        // Escape and quote artist if needed
-        String escapedArtist = artist.replace("\"", "\"\"");
-        String extendedDesc = escapedArtist.contains(",") ? "\"" + escapedArtist + "\"" : escapedArtist;
-
-        // Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
-        // We leave ON_HAND-QTY empty (they'll fill it in from current inventory)
-        return String.format("%s,%s,%s,,%d",
-                code,
-                description,
-                extendedDesc,
-                newQty);
+    private String formatChangeQtyRow(String code,String cardName,String artist,int newQty) {
+        if (newQty<0) throw new IllegalArgumentException("Quantity must be non-negative");
+        return com.cardpricer.service.CsvRows.row(code,cardName,artist==null ? "" : artist,"",newQty);
     }
 
     private void ensureDataDirectoryExists() {

@@ -56,6 +56,8 @@ public class AppDataDirectory {
     // -------------------------------------------------------------------------
 
     private static File resolveRoot() {
+        String override=System.getProperty("cardpricer.dataDir");
+        if (override!=null) { File isolated=new File(override); isolated.mkdirs(); return isolated; }
         File root;
         String appData = System.getenv("APPDATA");
         if (appData != null && !appData.isBlank()) {
@@ -80,10 +82,6 @@ public class AppDataDirectory {
      * Silently ignores any errors — migration is best-effort.
      */
     private static void migrateIfNeeded(File newRoot) {
-        // Skip if the root already has content (already migrated or fresh install)
-        String[] existing = newRoot.list();
-        if (existing != null && existing.length > 0) return;
-
         try {
             // Locate old data/ dir relative to the JAR
             java.net.URL loc = AppDataDirectory.class
@@ -93,22 +91,9 @@ public class AppDataDirectory {
             File oldData = new File(base, "data");
             if (!oldData.exists() || !oldData.isDirectory()) return;
 
-            // Copy each subdirectory
-            File[] subdirs = oldData.listFiles(File::isDirectory);
-            if (subdirs == null) return;
-            for (File sub : subdirs) {
-                File dest = new File(newRoot, sub.getName());
-                dest.mkdirs();
-                File[] files = sub.listFiles(File::isFile);
-                if (files == null) continue;
-                for (File f : files) {
-                    Files.copy(f.toPath(), new File(dest, f.getName()).toPath(),
-                            StandardCopyOption.REPLACE_EXISTING);
-                }
-            }
-            System.out.println("Migrated existing data from " + oldData + " → " + newRoot);
-        } catch (Exception ignored) {
-            // Never crash the app over a migration failure
+            DataMigration.migrate(oldData.toPath(),newRoot.toPath());
+        } catch (Exception failure) {
+            System.err.println("Legacy data migration incomplete; originals retained: "+failure.getMessage());
         }
     }
 }

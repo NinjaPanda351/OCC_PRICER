@@ -1,5 +1,6 @@
 package com.cardpricer.gui.panel.trade;
 
+import com.cardpricer.util.AppTheme;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
@@ -10,7 +11,7 @@ import java.math.RoundingMode;
 
 /**
  * Self-contained payment-method selector (store credit, check, inventory, partial).
- * Owns all radio buttons, partial-split fields, and split-recalculation logic.
+ * Owns the grouped payout buttons, partial-split fields, and split-recalculation logic.
  *
  * <p>Pass a {@code Runnable} to the constructor; it is called whenever the
  * selection changes so the parent can react (e.g. enable/disable check number
@@ -18,10 +19,10 @@ import java.math.RoundingMode;
  */
 public class PaymentTypePanel extends JPanel {
 
-    private final JRadioButton storeCreditRadio;
-    private final JRadioButton checkRadio;
-    private final JRadioButton inventoryRadio;
-    private final JRadioButton partialRadio;
+    private final JToggleButton storeCreditRadio;
+    private final JToggleButton checkRadio;
+    private final JToggleButton inventoryRadio;
+    private final JToggleButton partialRadio;
 
     private final JTextField partialCreditField;
     private final JTextField partialCheckField;
@@ -48,14 +49,20 @@ public class PaymentTypePanel extends JPanel {
         setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
 
         // --- Radio buttons row ---
-        JPanel radioPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 15, 0));
+        JPanel radioPanel = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 6, 0));
 
+        setOpaque(false); radioPanel.setOpaque(false);
         ButtonGroup paymentGroup = new ButtonGroup();
-        storeCreditRadio = new JRadioButton("Store Credit");
-        checkRadio = new JRadioButton("Check");
-        inventoryRadio = new JRadioButton("Inventory (No Payout)");
-        partialRadio = new JRadioButton("Partial (Split Payment)");
+        storeCreditRadio = new JToggleButton("Store credit");
+        checkRadio = new JToggleButton("Check");
+        inventoryRadio = new JToggleButton("Inventory");
+        partialRadio = new JToggleButton("Split payment");
 
+        for (JToggleButton option : new JToggleButton[]{storeCreditRadio, checkRadio, inventoryRadio, partialRadio}) {
+            option.putClientProperty("JButton.buttonType", "roundRect");
+            option.setMargin(new Insets(6, 12, 6, 12));
+        }
+        inventoryRadio.setToolTipText("Inventory transfer without a payout");
         storeCreditRadio.setSelected(true); // Default
 
         paymentGroup.add(storeCreditRadio);
@@ -104,6 +111,27 @@ public class PaymentTypePanel extends JPanel {
     // Public API
     // -------------------------------------------------------------------------
 
+    public void onPaymentEdited(Runnable changed) {
+        javax.swing.event.DocumentListener listener=new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { changed.run(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { changed.run(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { changed.run(); }
+        };
+        partialCreditField.getDocument().addDocumentListener(listener); partialCheckField.getDocument().addDocumentListener(listener);
+        for (JToggleButton button:new JToggleButton[]{storeCreditRadio,checkRadio,inventoryRadio,partialRadio}) button.addActionListener(e -> changed.run());
+    }
+    public void restore(String type, BigDecimal credit, BigDecimal check) {
+        switch (type) {
+            case "credit" -> storeCreditRadio.setSelected(true);
+            case "check" -> checkRadio.setSelected(true);
+            case "inventory" -> inventoryRadio.setSelected(true);
+            case "partial" -> partialRadio.setSelected(true);
+            default -> throw new IllegalArgumentException("Unsupported payment: " + type);
+        }
+        partialCreditField.setText(credit.toPlainString()); partialCheckField.setText(check.toPlainString());
+        partialPaymentPanel.setVisible("partial".equals(type));
+    }
+
     /** Returns "credit", "check", "inventory", or "partial". */
     public String getPaymentType() {
         if (checkRadio.isSelected())     return "check";
@@ -145,7 +173,7 @@ public class PaymentTypePanel extends JPanel {
         this.currentCreditSeed = creditSeed != null ? creditSeed : BigDecimal.ZERO;
         this.currentCheckSeed  = checkSeed  != null ? checkSeed  : BigDecimal.ZERO;
         if (partialRadio.isSelected()) {
-            updatePartialSplit();
+            updatePartialTotal();
         }
     }
 
@@ -174,11 +202,8 @@ public class PaymentTypePanel extends JPanel {
     // -------------------------------------------------------------------------
 
     private JPanel buildPartialPaymentPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
-        panel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("Split Payment"),
-                new EmptyBorder(5, 10, 5, 10)
-        ));
+        JPanel panel = AppTheme.transparent(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 10, 4));
+        panel.setBorder(new EmptyBorder(10, 0, 0, 0));
 
         panel.add(new JLabel("Store Credit $"));
 
@@ -214,8 +239,10 @@ public class PaymentTypePanel extends JPanel {
     }
 
     private void updatePartialSplit() {
-        partialCreditField.setText("0.00");
-        partialCheckField.setText("0.00");
+        if (partialCreditField.getText().isBlank() && partialCheckField.getText().isBlank()) {
+            partialCreditField.setText(currentCreditSeed.toPlainString());
+            partialCheckField.setText("0.00");
+        }
         updatePartialTotal();
     }
 
@@ -230,20 +257,14 @@ public class PaymentTypePanel extends JPanel {
             }
             if (currentTotal.compareTo(BigDecimal.ZERO) == 0) return;
 
-            BigDecimal creditRate = currentCreditSeed.divide(currentTotal, 10, RoundingMode.HALF_UP);
-            BigDecimal checkRate  = currentCheckSeed.divide(currentTotal, 10, RoundingMode.HALF_UP);
-            if (creditRate.compareTo(BigDecimal.ZERO) == 0) return;
+            if (currentCreditSeed.signum() == 0) return;
+            BigDecimal creditPayout = new BigDecimal(creditText);
 
-            BigDecimal creditPayout       = new BigDecimal(creditText.replace(",", ""));
-            BigDecimal valueUsedForCredit = creditPayout.divide(creditRate, 2, RoundingMode.HALF_UP);
-            BigDecimal remainingValue     = currentTotal.subtract(valueUsedForCredit);
-            if (remainingValue.compareTo(BigDecimal.ZERO) < 0) remainingValue = BigDecimal.ZERO;
-
-            BigDecimal checkPayout = remainingValue.multiply(checkRate).setScale(2, RoundingMode.HALF_UP);
-            partialCheckField.setText(String.format("%.2f", checkPayout));
+            BigDecimal checkPayout = com.cardpricer.service.SettlementEngine.remainingCheck(currentCreditSeed, currentCheckSeed, creditPayout);
+            partialCheckField.setText(String.format(java.util.Locale.ROOT, "%.2f", checkPayout));
             updatePartialTotal();
         } catch (Exception e) {
-            // Invalid number, don't update
+            updatePartialTotal();
         }
     }
 
@@ -258,20 +279,14 @@ public class PaymentTypePanel extends JPanel {
             }
             if (currentTotal.compareTo(BigDecimal.ZERO) == 0) return;
 
-            BigDecimal creditRate = currentCreditSeed.divide(currentTotal, 10, RoundingMode.HALF_UP);
-            BigDecimal checkRate  = currentCheckSeed.divide(currentTotal, 10, RoundingMode.HALF_UP);
-            if (checkRate.compareTo(BigDecimal.ZERO) == 0) return;
-
-            BigDecimal checkPayout       = new BigDecimal(checkText.replace(",", ""));
-            BigDecimal valueUsedForCheck = checkPayout.divide(checkRate, 2, RoundingMode.HALF_UP);
-            BigDecimal remainingValue    = currentTotal.subtract(valueUsedForCheck);
-            if (remainingValue.compareTo(BigDecimal.ZERO) < 0) remainingValue = BigDecimal.ZERO;
-
-            BigDecimal creditPayout = remainingValue.multiply(creditRate).setScale(2, RoundingMode.HALF_UP);
-            partialCreditField.setText(String.format("%.2f", creditPayout));
+            if (currentCheckSeed.signum() == 0) return;
+            BigDecimal checkPayout = new BigDecimal(checkText);
+            BigDecimal creditPayout = currentCreditSeed.multiply(currentCheckSeed.subtract(checkPayout))
+                    .divide(currentCheckSeed, 2, RoundingMode.HALF_UP);
+            partialCreditField.setText(String.format(java.util.Locale.ROOT, "%.2f", creditPayout));
             updatePartialTotal();
         } catch (Exception e) {
-            // Invalid number, don't update
+            updatePartialTotal();
         }
     }
 
@@ -280,13 +295,19 @@ public class PaymentTypePanel extends JPanel {
             String creditText = partialCreditField.getText().trim();
             String checkText  = partialCheckField.getText().trim();
 
-            BigDecimal creditPayout = creditText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(creditText.replace(",", ""));
-            BigDecimal checkPayout  = checkText.isEmpty()  ? BigDecimal.ZERO : new BigDecimal(checkText.replace(",", ""));
+            BigDecimal creditPayout = creditText.isEmpty() ? BigDecimal.ZERO : new BigDecimal(creditText);
+            BigDecimal checkPayout  = checkText.isEmpty()  ? BigDecimal.ZERO : new BigDecimal(checkText);
+            new com.cardpricer.service.SettlementEngine().settle(java.util.List.of(
+                    new com.cardpricer.service.SettlementEngine.Line("summary", 1, currentTotal,
+                            currentCreditSeed, currentCheckSeed, true)), "partial", creditPayout, checkPayout);
 
-            partialTotalLabel.setText(String.format("  =  $%.2f total", creditPayout.add(checkPayout)));
-            partialTotalLabel.setForeground(new Color(0, 150, 0));
+            partialTotalLabel.setText(String.format(java.util.Locale.ROOT, "  =  $%.2f total", creditPayout.add(checkPayout)));
+            partialTotalLabel.setForeground(AppTheme.success());
+            partialTotalLabel.setToolTipText(null);
         } catch (Exception e) {
-            // Ignore parse errors
+            partialTotalLabel.setText("  Review split");
+            partialTotalLabel.setForeground(AppTheme.color("OCC.danger", AppTheme.DANGER));
+            partialTotalLabel.setToolTipText(e.getMessage());
         }
     }
 }

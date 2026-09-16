@@ -76,6 +76,8 @@ public class PricingService {
      * @return condition-adjusted, rounded price
      */
     public BigDecimal applyConditionMultiplier(BigDecimal basePrice, String condition) {
+        if (basePrice == null || basePrice.signum() < 0) throw new IllegalArgumentException("Invalid base price");
+        if ("NM".equals(condition)) return basePrice;
         int conditionIndex = getConditionIndex(condition);
         double multiplier = CardConstants.CONDITION_MULTIPLIERS[conditionIndex];
 
@@ -86,7 +88,7 @@ public class PricingService {
                     .divide(CardConstants.ROUNDING_STEP_LOW, 0, RoundingMode.HALF_UP)
                     .multiply(CardConstants.ROUNDING_STEP_LOW);
             if (rounded.compareTo(NINE_FIFTY) == 0) rounded = BigDecimal.TEN;
-            return rounded;
+            return rounded.max(basePrice.min(CardConstants.RARITY_MIN_COMMON)).min(basePrice);
         } else {
             return adjustedPrice.setScale(0, RoundingMode.HALF_UP);
         }

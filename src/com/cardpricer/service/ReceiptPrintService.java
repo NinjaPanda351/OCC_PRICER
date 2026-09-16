@@ -81,33 +81,16 @@ public class ReceiptPrintService {
      * Uses only built-in Java — no external libraries required.
      */
     public static void saveAsPdf(Component parent, String receiptContent, String outputPath) {
-        try {
-            List<String> lines = wrapLines(receiptContent);
-
-            // Replace box-drawing characters with ASCII equivalents (PDF Courier = Latin-1)
-            List<String> safeLines = new ArrayList<>();
-            for (String l : lines) {
-                safeLines.add(toAsciiSafe(l));
-            }
-
-            byte[] pdf = buildPdf(safeLines);
-            try (FileOutputStream fos = new FileOutputStream(outputPath)) {
-                fos.write(pdf);
-            }
-
-            if (Desktop.isDesktopSupported()) {
-                Desktop.getDesktop().open(new File(outputPath));
-            } else {
-                JOptionPane.showMessageDialog(parent,
-                        "PDF saved:\n" + outputPath,
-                        "PDF Saved", JOptionPane.INFORMATION_MESSAGE);
-            }
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(parent,
-                    "PDF save failed: " + e.getMessage(),
-                    "Error", JOptionPane.ERROR_MESSAGE);
+        try { java.nio.file.Files.write(java.nio.file.Path.of(outputPath), createPdf(receiptContent)); }
+        catch (Exception e) {
+            JOptionPane.showMessageDialog(parent,"PDF save failed: "+e.getMessage(),"Save error",JOptionPane.ERROR_MESSAGE); return;
         }
+        try {
+            if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) Desktop.getDesktop().open(new File(outputPath));
+            else JOptionPane.showMessageDialog(parent,"PDF saved: "+outputPath);
+        } catch (Exception e) { JOptionPane.showMessageDialog(parent,"PDF saved: "+outputPath+"\nCould not open the PDF viewer: "+e.getMessage()); }
     }
+    public static byte[] createPdf(String receiptContent) throws IOException { return buildPdf(wrapLines(receiptContent)); }
 
     // -------------------------------------------------------------------------
     // Minimal PDF builder
@@ -186,17 +169,7 @@ public class ReceiptPrintService {
             int contObjId = firstContId + p;
             List<String> pageLines = pages.get(p);
 
-            StringBuilder cs = new StringBuilder();
-            cs.append("BT\n");
-            cs.append("/F1 ").append((int) FONT_SIZE).append(" Tf\n");
-            cs.append(leftX).append(' ').append(topY).append(" Td\n");
-            cs.append(lineH).append(" TL\n");
-            for (String line : pageLines) {
-                cs.append('(').append(escapePdfString(line)).append(") Tj T*\n");
-            }
-            cs.append("ET\n");
-
-            byte[] csBytes = cs.toString().getBytes(StandardCharsets.ISO_8859_1);
+            byte[] csBytes = UnicodePdfText.page(pageLines,FONT_SIZE,leftX,topY,lineH).getBytes(StandardCharsets.US_ASCII);
             offsets.add((long) out.size());
             writeStreamObj(out, contObjId, csBytes);
         }
@@ -214,7 +187,7 @@ public class ReceiptPrintService {
         xref.append("0 ").append(totalObjs).append('\n');
         xref.append("0000000000 65535 f \n"); // object 0 (free)
         for (int i = 0; i < offsets.size(); i++) {
-            xref.append(String.format("%010d 00000 n \n", offsets.get(i)));
+            xref.append(String.format(java.util.Locale.ROOT,"%010d 00000 n \n", offsets.get(i)));
         }
         write(out, xref.toString());
 

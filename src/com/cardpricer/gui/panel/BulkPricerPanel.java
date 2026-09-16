@@ -4,6 +4,8 @@ import com.cardpricer.gui.ShortcutHelpDialog;
 import com.cardpricer.model.Card;
 import com.cardpricer.service.CsvExportService;
 import com.cardpricer.service.ScryfallApiService;
+import com.cardpricer.service.SetCatalogService;
+import com.cardpricer.service.TaskCoordinator;
 import com.cardpricer.util.AppTheme;
 import com.cardpricer.util.CardConstants;
 import com.cardpricer.util.SetList;
@@ -15,6 +17,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.awt.event.HierarchyEvent;
 
 /**
  * Panel for bulk set price fetching with multi-set selection.
@@ -27,6 +33,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
     private static final String[] HELP_COLS  = {"Feature", "Description"};
     private static final String[][] HELP_ROWS = {
         {"Search box",      "Filter the set list by name"},
+        {"Refresh sets",    "Check Scryfall for new sets now; the list also updates daily. Promo, token, Art Series, and Front Cards sets are excluded."},
         {"Check / uncheck", "Select which sets to fetch prices for"},
         {"Select All",      "Check all currently visible sets"},
         {"Deselect All",    "Uncheck all currently visible sets"},
@@ -39,6 +46,12 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
     private final ScryfallApiService apiService;
     private final CsvExportService csvService;
+    private final SetCatalogService setCatalogService;
+    private SetCatalogService.Catalog setCatalog = SetCatalogService.bundled();
+    private SwingWorker<SetCatalogService.Catalog, SetCatalogService.Catalog> setCatalogWorker;
+    private JButton refreshSetsButton;
+    private JLabel setCatalogStatus;
+    private final Timer setRefreshTimer = new Timer(60 * 60 * 1000, e -> refreshSets(false));
 
     private JTextField searchField;
     private JPanel setCheckboxPanel;
@@ -60,39 +73,42 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
     /** Constructs the Set Pricer panel and builds the set-checkbox list. */
     public BulkPricerPanel() {
+        this(new SetCatalogService());
+    }
+
+    BulkPricerPanel(SetCatalogService setCatalogService) {
         this.apiService = new ScryfallApiService();
         this.csvService = new CsvExportService();
+        this.setCatalogService = setCatalogService;
         this.setCheckboxes = new HashMap<>();
         this.visibleCheckboxes = new ArrayList<>();
 
         setLayout(new BorderLayout(10, 10));
-        setBorder(new EmptyBorder(20, 20, 20, 20));
+        setBorder(new EmptyBorder(16, 20, 14, 20));
 
         add(createHeaderPanel(), BorderLayout.NORTH);
         add(createCenterPanel(), BorderLayout.CENTER);
         add(createBottomPanel(), BorderLayout.SOUTH);
 
         initializeSetCheckboxes();
+        addHierarchyListener(event -> {
+            if ((event.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0) {
+                if (isShowing()) {
+                    refreshSets(false);
+                    setRefreshTimer.start();
+                } else {
+                    setRefreshTimer.stop();
+                }
+            }
+        });
     }
 
     private JPanel createHeaderPanel() {
-        JPanel titlePanel = new JPanel();
-        titlePanel.setLayout(new BoxLayout(titlePanel, BoxLayout.Y_AXIS));
-
-        JLabel title = new JLabel("Set Pricer");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 24f));
-        title.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JLabel subtitle = new JLabel("Select sets to fetch prices from Scryfall/TCGPlayer");
-        subtitle.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        titlePanel.add(title);
-        titlePanel.add(Box.createVerticalStrut(4));
-        titlePanel.add(subtitle);
+        JPanel titlePanel = AppTheme.panelHeader("Set pricer", "Price entire sets and prepare your next export.");
 
         JButton helpBtn = new JButton("?");
-        helpBtn.setFocusPainted(false);
-        helpBtn.setPreferredSize(new Dimension(34, 34));
+
+
         helpBtn.setFont(helpBtn.getFont().deriveFont(Font.BOLD, 14f));
         helpBtn.setToolTipText("Help");
         helpBtn.addActionListener(e ->
@@ -101,30 +117,29 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
         JPanel panel = new JPanel(new BorderLayout(10, 0));
         panel.add(titlePanel, BorderLayout.CENTER);
-        panel.add(helpBtn,    BorderLayout.EAST);
-        panel.setBorder(new EmptyBorder(0, 0, 16, 0));
+        JPanel headerActions = AppTheme.transparent(new com.cardpricer.gui.WrapLayout(FlowLayout.RIGHT, 0, 0));
+        headerActions.add(helpBtn);
+        panel.add(headerActions, BorderLayout.EAST);
+        panel.setBorder(new EmptyBorder(0, 0, 4, 0));
 
         return panel;
     }
 
     private JPanel createCenterPanel() {
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.fill = GridBagConstraints.BOTH;
-        gbc.insets = new Insets(5, 5, 5, 5);
-
-        // Left side - Set selector
-        gbc.gridx = 0;
-        gbc.gridy = 0;
-        gbc.weightx = 0.4;
-        gbc.weighty = 1.0;
-        panel.add(createSetSelectorPanel(), gbc);
-
-        // Right side - Configuration and log
-        gbc.gridx = 1;
-        gbc.weightx = 0.6;
-        panel.add(createRightPanel(), gbc);
-
+        JPanel panel = new JPanel(new BorderLayout());
+        JPanel sets = createSetSelectorPanel();
+        JPanel configuration = createRightPanel();
+        sets.setMinimumSize(new Dimension(com.formdev.flatlaf.util.UIScale.scale(210), 0));
+        configuration.setMinimumSize(new Dimension(com.formdev.flatlaf.util.UIScale.scale(320), 0));
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sets, configuration) {
+            private boolean initialized;
+            @Override public void doLayout() {
+                if (!initialized && getWidth() > 0) { setDividerLocation(.35); initialized = true; }
+                super.doLayout();
+            }
+        };
+        split.setResizeWeight(.35); split.setBorder(BorderFactory.createEmptyBorder());
+        panel.add(split);
         return panel;
     }
 
@@ -140,7 +155,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
         JLabel searchLabel = new JLabel("Search:");
         searchPanel.add(searchLabel, BorderLayout.WEST);
         searchField = new JTextField();
-        searchField.setToolTipText("Type to filter sets...");
+        searchField.setToolTipText("Filter by set name or code...");
         searchField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
             public void changedUpdate(javax.swing.event.DocumentEvent e) { filterSets(); }
             public void removeUpdate(javax.swing.event.DocumentEvent e) { filterSets(); }
@@ -149,12 +164,11 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
         searchPanel.add(searchField, BorderLayout.CENTER);
 
         // Control buttons
-        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        JPanel controlPanel = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 5, 0));
         JButton selectAllBtn = new JButton("Select All");
         JButton deselectAllBtn = new JButton("Deselect All");
 
-        selectAllBtn.setFocusPainted(false);
-        deselectAllBtn.setFocusPainted(false);
+
 
         selectAllBtn.putClientProperty("JButton.buttonType", "roundRect");
         deselectAllBtn.putClientProperty("JButton.buttonType", "roundRect");
@@ -188,34 +202,89 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
         panel.add(setScrollPane, BorderLayout.CENTER);
 
+        JPanel updates = new JPanel(new BorderLayout(5, 5));
+        refreshSetsButton = new JButton("Refresh sets");
+        refreshSetsButton.addActionListener(e -> refreshSets(true));
+        setCatalogStatus = new JLabel("Bundled list; connect to update");
+        setCatalogStatus.setToolTipText("Updates daily from Scryfall; promo, token, Art Series, and Front Cards sets are excluded.");
+        updates.add(refreshSetsButton, BorderLayout.NORTH);
+        updates.add(setCatalogStatus, BorderLayout.SOUTH);
+        panel.add(updates, BorderLayout.SOUTH);
+
         return panel;
     }
 
     private void initializeSetCheckboxes() {
-        List<String> allSets = SetList.ALL_SETS_CUSTOM_CODES;
+        applySetCatalog(setCatalog);
+    }
 
-        for (String setCode : allSets) {
-            JCheckBox checkbox = new JCheckBox(setCode);
+    void applySetCatalog(SetCatalogService.Catalog catalog) {
+        List<String> selected = getSelectedSets();
+        setCatalog = catalog;
+        setCheckboxes.clear();
+        for (SetCatalogService.Entry set : catalog.sets()) {
+            JCheckBox checkbox = new JCheckBox(set.label());
+            checkbox.setSelected(selected.contains(set.code()));
+            checkbox.setEnabled(fetchButton.isEnabled());
+            checkbox.setToolTipText(set.label() + (set.releasedAt().isBlank() ? "" : " | Release: " + set.releasedAt()));
             checkbox.setAlignmentX(Component.LEFT_ALIGNMENT);
             checkbox.addActionListener(e -> updateSelectedCount());
-
-            setCheckboxes.put(setCode, checkbox);
-            visibleCheckboxes.add(checkbox);
-            setCheckboxPanel.add(checkbox);
+            setCheckboxes.put(set.code(), checkbox);
         }
+        filterSets();
+        String updated = catalog.updatedAt().equals(java.time.Instant.EPOCH) ? "Bundled list" : "Updated "
+                + DateTimeFormatter.ofPattern("MMM d, yyyy").withZone(ZoneId.systemDefault()).format(catalog.updatedAt());
+        setCatalogStatus.setText(catalog.notice().isBlank() ? updated : catalog.notice());
+        setCatalogStatus.setToolTipText(catalog.sets().size() + " sets | " + updated
+                + " | Promo, token, Art Series, and Front Cards sets excluded" + (catalog.notice().isBlank() ? "" : " | " + catalog.notice()));
+    }
 
-        updateSelectedCount();
+    private void refreshSets(boolean force) {
+        if (setCatalogWorker != null) return;
+        refreshSetsButton.setEnabled(false);
+        setCatalogStatus.setText("Checking for new sets...");
+        SetCatalogService.Catalog current = setCatalog;
+        setCatalogWorker = new SwingWorker<>() {
+            @Override protected SetCatalogService.Catalog doInBackground() throws Exception {
+                SetCatalogService.Catalog cached = current.updatedAt().equals(java.time.Instant.EPOCH)
+                        ? setCatalogService.loadCached() : current;
+                publish(cached);
+                return force || setCatalogService.needsRefresh(cached) ? setCatalogService.refresh() : cached;
+            }
+            @Override protected void process(List<SetCatalogService.Catalog> chunks) {
+                applySetCatalog(chunks.getLast());
+            }
+            @Override protected void done() {
+                try {
+                    applySetCatalog(get());
+                } catch (Exception failure) {
+                    setCatalogStatus.setText("Update unavailable; keeping current list");
+                    Throwable cause = failure.getCause() == null ? failure : failure.getCause();
+                    setCatalogStatus.setToolTipText("Refresh sets to retry. " + cause.getMessage());
+                } finally {
+                    setCatalogWorker = null;
+                    refreshSetsButton.setEnabled(true);
+                }
+            }
+        };
+        try {
+            TaskCoordinator.execute(setCatalogWorker);
+        } catch (java.util.concurrent.RejectedExecutionException busy) {
+            setCatalogWorker = null;
+            refreshSetsButton.setEnabled(true);
+            setCatalogStatus.setText("App busy; refresh sets to retry");
+        }
     }
 
     private void filterSets() {
-        String searchText = searchField.getText().toLowerCase().trim();
+        String searchText = searchField.getText().toLowerCase(Locale.ROOT).trim();
 
         setCheckboxPanel.removeAll();
         visibleCheckboxes.clear();
 
-        for (String setCode : SetList.ALL_SETS_CUSTOM_CODES) {
-            if (searchText.isEmpty() || setCode.toLowerCase().contains(searchText)) {
-                JCheckBox checkbox = setCheckboxes.get(setCode);
+        for (SetCatalogService.Entry set : setCatalog.sets()) {
+            if (set.matches(searchText)) {
+                JCheckBox checkbox = setCheckboxes.get(set.code());
                 visibleCheckboxes.add(checkbox);
                 setCheckboxPanel.add(checkbox);
             }
@@ -247,8 +316,8 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
     private List<String> getSelectedSets() {
         List<String> selected = new ArrayList<>();
 
-        // Maintain SetList order
-        for (String setCode : SetList.ALL_SETS_CUSTOM_CODES) {
+        for (SetCatalogService.Entry set : setCatalog.sets()) {
+            String setCode = set.code();
             JCheckBox checkbox = setCheckboxes.get(setCode);
             if (checkbox != null && checkbox.isSelected()) {
                 selected.add(setCode);
@@ -286,6 +355,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
         gbc.gridx = 1;
         gbc.weightx = 1.0;
         formatCombo = new JComboBox<>(CsvExportService.ExportFormat.values());
+        formatCombo.setMinimumSize(new Dimension(100, formatCombo.getPreferredSize().height));
         formatCombo.setToolTipText("Choose export format for CSV");
         panel.add(formatCombo, gbc);
 
@@ -309,12 +379,12 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
         gbc.gridx = 1;
         gbc.weightx = 1.0;
-        JPanel splitPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        JPanel splitPanel = new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT, 5, 0));
 
-        SpinnerNumberModel spinnerModel = new SpinnerNumberModel(10000, 1000, 100000, 1000);
+        SpinnerNumberModel spinnerModel = new SpinnerNumberModel(10_000, 1_000, 1_000_000, 1_000);
         splitSizeSpinner = new JSpinner(spinnerModel);
-        splitSizeSpinner.setToolTipText("Number of cards per combined file");
-        ((JSpinner.DefaultEditor) splitSizeSpinner.getEditor()).getTextField().setColumns(6);
+        splitSizeSpinner.setToolTipText("Number of cards per combined file (1,000 to 1,000,000)");
+        ((JSpinner.DefaultEditor) splitSizeSpinner.getEditor()).getTextField().setColumns(9);
 
         JLabel cardsLabel = new JLabel("cards");
 
@@ -381,12 +451,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
     }
 
     private void fetchMultipleSets() {
-        List<String> selectedSets = getSelectedSets();;
-
-        // Validate all codes exist in mapping
-        List<String> invalid = selectedSets.stream()
-                .filter(code -> SetList.toScryfallCode(code).equals(code)) // No mapping found
-                .toList();
+        List<String> selectedSets = getSelectedSets();
 
         if (selectedSets.isEmpty()) {
             JOptionPane.showMessageDialog(this,
@@ -476,7 +541,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
      */
     @Override
     public boolean isSafeToUnload() {
-        return currentWorker == null || currentWorker.isDone();
+        return (currentWorker == null || currentWorker.isDone()) && setCatalogWorker == null;
     }
 
     /**
@@ -485,6 +550,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
      */
     private class BulkFetchWorker extends SwingWorker<Void, String> {
         private final List<String> sets;
+        private final Map<String, String> apiSetCodes;
         private final CsvExportService.ExportFormat format;
         private final boolean createCombined;
         private final int splitSize;
@@ -503,6 +569,10 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
         public BulkFetchWorker(List<String> sets, CsvExportService.ExportFormat format,
                                boolean createCombined, int splitSize) {
             this.sets = sets;
+            this.apiSetCodes = new HashMap<>();
+            for (SetCatalogService.Entry set : setCatalog.sets()) {
+                apiSetCodes.put(set.code(), set.apiCode());
+            }
             this.format = format;
             this.createCombined = createCombined;
             this.splitSize = splitSize;
@@ -510,6 +580,10 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
         @Override
         protected Void doInBackground() throws Exception {
+            runDirectory = com.cardpricer.util.AppDataDirectory.root().toPath().resolve("bulk-runs/"+java.util.UUID.randomUUID());
+            java.nio.file.Files.createDirectories(runDirectory);
+            com.cardpricer.util.AtomicFiles.write(runDirectory.resolve("manifest.json"),new org.json.JSONObject()
+                    .put("status","running").put("sets",sets).put("format",format.name()).toString(2));
             for (int i = 0; i < sets.size(); i++) {
                 if (isCancelled()) break;
 
@@ -525,15 +599,15 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
                 publish(String.format("[%d/%d] Processing %s...", current, sets.size(), setCode));
 
                 try {
-                    // Convert our custom code to Scryfall API code (e.g., COK -> chk)
-                    String apiSetCode = SetList.toScryfallCode(setCode);
+                    // Snapshot the provider identity so a refresh cannot change the export.
+                    String apiSetCode = apiSetCodes.get(setCode);
                     List<Card> cards = apiService.fetchCardsFromSet(apiSetCode);
 
                     String filename = setCode.toUpperCase() + "_prices.csv";
-                    csvService.exportCardsToCsv(cards, filename, format);
+                    new CsvExportService(runDirectory).exportCardsToCsv(cards, filename, format);
 
                     if (createCombined) {
-                        allCardEntries.addAll(flattenCards(cards));
+                        allCardEntries.addAll(CsvExportService.flattenCards(cards));
                     }
 
                     publish("✓ " + setCode + " - Success (" + cards.size() + " cards)");
@@ -559,9 +633,11 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
         }
 
 
+        private java.nio.file.Path runDirectory;
+
         private void createCombinedFiles() throws Exception {
-            java.io.File combinedFileDir = com.cardpricer.util.AppDataDirectory.combinedFiles();
-            java.io.File pricesFileDir   = com.cardpricer.util.AppDataDirectory.prices();
+            java.io.File combinedFileDir = runDirectory.resolve("combined").toFile();
+            java.nio.file.Files.createDirectories(combinedFileDir.toPath());
 
             int fileNumber = 0;
             int currentIndex = 0;
@@ -574,24 +650,9 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
                 String filename = String.format("%s/%02d_combined_list.csv",
                         combinedFileDir.getAbsolutePath(), fileNumber);
 
-                try (java.io.PrintWriter writer = new java.io.PrintWriter(
-                        new java.io.FileWriter(filename))) {
-
-                    // Write header based on format
-                    if (format == CsvExportService.ExportFormat.IMPORT_UTILITY) {
-                        writer.println("DEPARTMENT,CATEGORY,CODE,DESCRIPTION,EXTENDED DESCRIPTION,SUB DESCRIPTION,TAX,PRICE");
-                    }
-
-                    // Write entries
-                    for (com.cardpricer.model.CardEntry entry : batch) {
-                        if (format == CsvExportService.ExportFormat.IMPORT_UTILITY) {
-                            writer.println(entry.toImportUtilityRow());
-                        } else if (format == CsvExportService.ExportFormat.ITEM_WIZARD_CHANGE_QTY_ZERO){
-                            writer.println(entry.toZeroOutItems());
-                        } else {
-                            writer.println(entry.toItemWizardRow());
-                        }
-                    }
+                try (java.io.Writer writer = java.nio.file.Files.newBufferedWriter(
+                        java.nio.file.Path.of(filename), java.nio.charset.StandardCharsets.UTF_8)) {
+                    com.cardpricer.service.CardCsvEncoder.write(writer, batch, format);
                 }
 
                 publish(">>> Created combined file: " + filename + " (" + batch.size() + " entries)");
@@ -603,27 +664,7 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
             publish("Combined files complete: " + fileNumber + " file(s) created");
         }
 
-        private List<com.cardpricer.model.CardEntry> flattenCards(List<Card> cards) {
-            List<com.cardpricer.model.CardEntry> entries = new ArrayList<>();
 
-            for (Card card : cards) {
-                // Add normal version if it has a price
-                if (card.hasNormalPrice()) {
-                    com.cardpricer.model.CardEntry normalEntry =
-                            new com.cardpricer.model.CardEntry(card, false);
-                    entries.add(normalEntry);
-                }
-
-                // Add foil version if it has a price
-                if (card.hasFoilPrice()) {
-                    com.cardpricer.model.CardEntry foilEntry =
-                            new com.cardpricer.model.CardEntry(card, true);
-                    entries.add(foilEntry);
-                }
-            }
-
-            return entries;
-        }
 
         @Override
         protected void process(List<String> chunks) {
@@ -648,6 +689,20 @@ public class BulkPricerPanel extends JPanel implements ManagedPanel {
 
         @Override
         protected void done() {
+            String outcome="complete";
+            try { get(); if (failureCount>0) outcome="partial failure"; }
+            catch (java.util.concurrent.CancellationException e) { outcome="cancelled"; }
+            catch (Exception e) { outcome="failed"; logArea.append("Output failed: "+e.getMessage()+"\n"); }
+            if (runDirectory!=null) try {
+                com.cardpricer.util.AtomicFiles.write(runDirectory.resolve("manifest.json"),new org.json.JSONObject()
+                        .put("status",outcome).put("sets",sets).put("format",format.name()).put("successful",successCount)
+                        .put("failed",failureCount).put("entries",allCardEntries.size()).toString(2));
+            } catch (Exception e) { outcome="failed to record manifest"; }
+            if (!"complete".equals(outcome)) {
+                progressBar.setString(outcome); logArea.append("Run "+outcome+"\n");
+                setControlsEnabled(true); cancelButton.setEnabled(false); currentWorker=null; statusLabel.setText(outcome); return;
+            }
+            logArea.append("Output directory: "+runDirectory+"\n");
             progressBar.setValue(progressBar.getMaximum());
             progressBar.setString("Complete");
             cancelButton.setEnabled(false);

@@ -1,6 +1,9 @@
 package com.cardpricer.model;
 
 import com.cardpricer.service.PricingService;
+import com.cardpricer.service.CardCsvEncoder;
+import com.cardpricer.service.CsvExportService.ExportFormat;
+import java.util.Locale;
 
 import java.math.BigDecimal;
 
@@ -87,7 +90,7 @@ public class CardEntry {
      * Returns price as a formatted string with dollar sign
      */
     public String getPriceAsString() {
-        return String.format("$%.2f", myPrice);
+        return String.format(Locale.ROOT, "$%.2f", myPrice);
     }
 
     /**
@@ -111,7 +114,7 @@ public class CardEntry {
      * Determines if this is a foil entry based on the collector code
      */
     public boolean isFoil() {
-        return mySetCollectorCode.endsWith("F");
+        return mySetCollectorCode.toUpperCase(Locale.ROOT).endsWith("F");
     }
 
     @Override
@@ -120,98 +123,19 @@ public class CardEntry {
                 mySetCollectorCode, myCardName, getPriceAsString());
     }
 
-    /**
-     * Converts this entry to a CSV row for Import Utility format
-     * Format: DEPARTMENT,CATEGORY,CODE,DESCRIPTION,EXTENDED DESCRIPTION,SUB DESCRIPTION,TAX,PRICE
-     */
+    public String getRarity() { return myRarity; }
+    public String getArtist() { return myArtist; }
+
+    /** Compatibility methods; CSV schema and encoding live in CardCsvEncoder. */
     public String toImportUtilityRow() {
-        BigDecimal roundedPrice = getRoundedPrice();
-
-        // Card name (description) - quote if contains comma
-        String cardName = myCardName.replace("\"", "\"\"");
-        String description = cardName.contains(",") ? "\"" + cardName + "\"" : cardName;
-
-        // Artist (extended description) - quote if contains comma
-        String artist = myArtist != null ? myArtist : "";
-        if (artist.contains(",")) {
-            artist = "\"" + artist.replace("\"", "\"\"") + "\"";
-        }
-
-        // Rarity abbreviation (sub description)
-        String rarityAbbrev = getRarityAbbreviation();
-
-        // Format: DEPARTMENT,CATEGORY,CODE,DESCRIPTION,EXTENDED DESCRIPTION,SUB DESCRIPTION,TAX,PRICE
-        return String.format("5,5.2,%s,%s,%s,%s,TAX,%.2f",
-                mySetCollectorCode,
-                description,
-                artist,
-                rarityAbbrev,
-                roundedPrice);
+        return CardCsvEncoder.row(this, ExportFormat.IMPORT_UTILITY);
     }
 
-    /**
-     * Converts this entry to a CSV row for Item Wizard format
-     * Format: CODE,DESCRIPTION,,0,0.0,0,0,0,PRICE
-     */
     public String toItemWizardRow() {
-        BigDecimal roundedPrice = getRoundedPrice();
-        String cardName = myCardName.replace("\"", "\"\"");
-
-        // Only quote the description if it contains a comma
-        String description = cardName.contains(",") ? "\"" + cardName + "\"" : cardName;
-
-        // Format: CODE,DESCRIPTION,,0,0.0,0,0,0,PRICE
-        return String.format("%s,%s,,0,0.0,0,0,0,%.2f",
-                mySetCollectorCode,
-                description,
-                roundedPrice);
+        return CardCsvEncoder.row(this, ExportFormat.ITEM_WIZARD);
     }
 
-    /**
-     * Converts this entry to a CSV row for the Item Wizard Change Qty format,
-     * leaving the current on-hand quantity blank and setting the new quantity to zero.
-     *
-     * <p>Format: {@code CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY}
-     *
-     * @return a CSV row string representing this entry with a zero new-quantity
-     */
     public String toZeroOutItems() {
-        BigDecimal roundedPrice = getRoundedPrice();
-        String cardName = myCardName.replace("\"", "\"\"");
-
-        // Only quote the description if it contains a comma
-        String description = cardName.contains(",") ? "\"" + cardName + "\"" : cardName;
-
-        // Artist (extended description) - quote if contains comma
-        String artist = myArtist != null ? myArtist : "";
-        if (artist.contains(",")) {
-            artist = "\"" + artist.replace("\"", "\"\"") + "\"";
-        }
-
-        // Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
-        return String.format("%s,%s,%s,,0",
-                mySetCollectorCode,
-                description,
-                artist);
-    }
-
-    /**
-     * Gets abbreviated rarity code
-     * c = common, u = uncommon, r = rare, m = mythic
-     */
-    private String getRarityAbbreviation() {
-        if (myRarity == null) {
-            return "";
-        }
-
-        String rarityLower = myRarity.toLowerCase();
-
-        switch (rarityLower) {
-            case "common": return "C";
-            case "uncommon": return "U";
-            case "rare": return "R";
-            case "mythic": return "M";
-            default: return rarityLower.toUpperCase();
-        }
+        return CardCsvEncoder.row(this, ExportFormat.ITEM_WIZARD_CHANGE_QTY_ZERO);
     }
 }

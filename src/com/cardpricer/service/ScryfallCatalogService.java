@@ -31,7 +31,7 @@ import java.util.zip.GZIPOutputStream;
  * {@link VintageUtil#resolveSetAlias(String)} so that user input always maps to
  * the canonical Scryfall set code.
  */
-public class ScryfallCatalogService {
+public class ScryfallCatalogService implements CardRepository {
 
     // ── Public interface ──────────────────────────────────────────────────────
 
@@ -65,14 +65,15 @@ public class ScryfallCatalogService {
     // ── Constants ─────────────────────────────────────────────────────────────
 
     private static final String BULK_DATA_API  = "https://api.scryfall.com/bulk-data";
-    private static final String USER_AGENT     = "CardPricerApp/1.0";
     private static final String CACHE_FILENAME = "catalog.ndjson.gz";
 
     // ── State ─────────────────────────────────────────────────────────────────
 
     /** Populated after a successful load or build; {@code null} when not loaded. */
-    private volatile Map<String, Card> index;
+    private volatile Map<String, com.cardpricer.model.ProviderPrinting> index;
     private volatile int cardCount;
+    private volatile int ambiguousLegacyKeys;
+    public int getAmbiguousLegacyKeys() { return ambiguousLegacyKeys; }
 
     // ── Public accessors ──────────────────────────────────────────────────────
 
@@ -98,6 +99,7 @@ public class ScryfallCatalogService {
     public void invalidate() {
         index = null;
         cardCount = 0;
+        ambiguousLegacyKeys = 0;
     }
 
     /**
@@ -111,23 +113,22 @@ public class ScryfallCatalogService {
      * @return the matching {@link Card}, or {@link Optional#empty()} if not in the catalog
      */
     public Optional<Card> lookup(String setCode, String collectorNumber) {
-        Map<String, Card> snapshot = index;
+        Map<String, com.cardpricer.model.ProviderPrinting> snapshot = index;
         if (snapshot == null) return Optional.empty();
-        return Optional.ofNullable(snapshot.get(buildKey(setCode, collectorNumber)));
+        return Optional.ofNullable(snapshot.get(buildKey(setCode, collectorNumber))).map(com.cardpricer.model.ProviderPrinting::toCard);
     }
 
     // ── Key normalisation ─────────────────────────────────────────────────────
 
     /**
      * Builds a lookup key: {@code "SETCODE:COLLNUM"} — both upper-case;
-     * finish markers and other special chars stripped; hyphens preserved.
+     * collector markers and hyphens are preserved.
      */
     private static String buildKey(String setCode, String collectorNumber) {
         // Resolve vintage aliases ("alpha" → "lea") to match how fetchCard() works
         String resolved  = VintageUtil.resolveSetAlias(setCode);
-        // Strip non-alphanumeric except hyphens (removes ★ for surge foil)
-        String cleanColl = collectorNumber.replaceAll("[^0-9A-Za-z\\-]", "").toUpperCase();
-        return resolved.toUpperCase() + ":" + cleanColl;
+        String cleanColl = collectorNumber.toUpperCase(java.util.Locale.ROOT);
+        return resolved.toUpperCase(java.util.Locale.ROOT) + ":" + cleanColl;
     }
 
     // ── Cache file path ───────────────────────────────────────────────────────
@@ -144,13 +145,15 @@ public class ScryfallCatalogService {
      * @return the number of cards loaded
      * @throws IOException if the cache file does not exist or cannot be read
      */
-    public int loadFromDisk() throws IOException {
+    public synchronized int loadFromDisk() throws IOException {
         File cacheFile = getCacheFile();
         if (!cacheFile.exists()) {
             throw new IOException("Catalog cache not found: " + cacheFile.getAbsolutePath());
         }
 
-        Map<String, Card> newIndex = new HashMap<>(400_000);
+        Map<String, com.cardpricer.model.ProviderPrinting> newIndex = new HashMap<>(400_000);
+        java.util.Set<String> ambiguous = new java.util.HashSet<>();
+        java.util.Set<String> legacyKeys = new java.util.HashSet<>();
         int count = 0;
 
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
@@ -161,21 +164,38 @@ public class ScryfallCatalogService {
                 try {
                     JSONObject obj = new JSONObject(line);
                     Card card = cardFromCacheLine(obj);
-                    newIndex.put(obj.getString("k"), card);
+                    String key = buildKey(card.getSetCode(), card.getCollectorNumber());
+                    boolean legacy = !obj.has("name");
+                    if (ambiguous.contains(key)) {
+                        if (!legacy) throw new IOException("Mixed legacy and current catalog key");
+                        continue;
+                    }
+                    var printing = com.cardpricer.model.ProviderPrinting.from(card);
+                    var previous = newIndex.putIfAbsent(key, printing);
+                    if (previous != null) {
+                        if (!legacy || !legacyKeys.contains(key)) throw new IOException("Duplicate catalog printing key");
+                        // Old cache files collapsed PLST identifiers. Never guess which printing won.
+                        if (!previous.equals(printing)) { newIndex.remove(key); ambiguous.add(key); }
+                        continue;
+                    }
+                    if (legacy) legacyKeys.add(key);
                     count++;
-                } catch (Exception ignored) {
-                    // Skip any malformed lines — they should not occur in a clean cache
+                } catch (Exception failure) {
+                    throw new IOException("Invalid catalog record", failure);
                 }
             }
         }
 
+        if (newIndex.isEmpty()) throw new IOException("Catalog is empty; previous cache retained");
         this.index     = Collections.unmodifiableMap(newIndex);
-        this.cardCount = count;
-        return count;
+        this.cardCount = newIndex.size();
+        this.ambiguousLegacyKeys = ambiguous.size();
+        return cardCount;
     }
 
     /** Deserialises a {@link Card} from a compact cache-line JSON object. */
     private static Card cardFromCacheLine(JSONObject obj) {
+        if (obj.has("name")) return ProviderCardMapper.fromJson(obj);
         Card card = new Card();
         card.setName(obj.getString("nm"));
         card.setSetCode(obj.getString("s"));
@@ -203,7 +223,7 @@ public class ScryfallCatalogService {
 
     /**
      * Downloads the Scryfall {@code default_cards} bulk file, parses it while
-     * streaming (no OOM risk), writes a compact NDJSON.gz cache to disk, and
+     * streaming input (the in-memory index still requires heap space), writes a compact NDJSON.gz cache to disk, and
      * loads the result into the in-memory index.
      *
      * <p>This method is synchronous and should be called from a background thread
@@ -213,10 +233,25 @@ public class ScryfallCatalogService {
      * @throws InterruptedException if cancelled via the progress callback
      * @throws Exception            on any network or I/O failure
      */
+    private long lastRefreshCompleted;
     public void downloadAndBuild(DownloadProgress progress) throws Exception {
+        long requestedAt = System.nanoTime();
+        synchronized (this) {
+            if (Thread.currentThread().isInterrupted() || (progress != null && progress.isCancelled()))
+                throw new InterruptedException("Catalog refresh cancelled");
+            if (lastRefreshCompleted >= requestedAt) {
+                if (progress != null) progress.onUpdate(cardCount, "Catalog already refreshed");
+                return;
+            }
+            downloadAndBuildSingle(progress);
+            lastRefreshCompleted = System.nanoTime();
+        }
+    }
+
+    private void downloadAndBuildSingle(DownloadProgress progress) throws Exception {
         // Step 1 — find the download URI in Scryfall's bulk-data catalogue
         if (progress != null) {
-            if (progress.isCancelled()) return;
+            if (progress.isCancelled()) throw new InterruptedException("Catalog refresh cancelled");
             progress.onUpdate(0, "Looking up Scryfall bulk data URL\u2026");
         }
 
@@ -227,14 +262,15 @@ public class ScryfallCatalogService {
                 : bulkMeta.getString("download_uri");
 
         if (progress != null) {
-            if (progress.isCancelled()) return;
+            if (progress.isCancelled()) throw new InterruptedException("Catalog refresh cancelled");
             progress.onUpdate(0, "Connecting to Scryfall\u2026");
         }
 
         // Step 2 — stream, parse, and write cache simultaneously
         File cacheFile = getCacheFile();
-        File tmpFile   = new File(cacheFile.getParent(), CACHE_FILENAME + ".tmp");
-        Map<String, Card> newIndex = new HashMap<>(400_000);
+        File tmpFile = java.nio.file.Files.createTempFile(cacheFile.toPath().getParent(), "catalog-", ".tmp").toFile();
+        try {
+        Map<String, com.cardpricer.model.ProviderPrinting> newIndex = new HashMap<>(400_000);
 
         HttpURLConnection conn = null;
         try {
@@ -249,70 +285,49 @@ public class ScryfallCatalogService {
                  PrintWriter       cacheWriter = new PrintWriter(
                          new OutputStreamWriter(gzOut, StandardCharsets.UTF_8))) {
 
-                // Scryfall bulk file is now JSONL: one JSON object per line, no wrapping array.
-                // Defensive fallback: strip old array-format artefacts (leading '[', trailing ']',
-                // trailing commas) in case Scryfall ever reverts or the stream is from a local copy.
-                int    cardsProcessed = 0;
-                String rawLine;
-                while ((rawLine = reader.readLine()) != null) {
-                    if (progress != null && progress.isCancelled()) {
-                        tmpFile.delete();
-                        throw new InterruptedException("Catalog download cancelled by user");
+                int[] cardsProcessed = {0};
+                ProviderCardStream.read(reader, () -> Thread.currentThread().isInterrupted()
+                        || (progress != null && progress.isCancelled()), cardJson -> {
+                    if ("en".equals(cardJson.optString("lang")) && !cardJson.optBoolean("digital", false)) {
+                        cardJson.put("price_observed_at", bulkMeta.optString("updated_at", "unknown"));
+                        processCardJson(cardJson, newIndex, cacheWriter);
+                        cardsProcessed[0]++;
+                        if (cardsProcessed[0] % 5_000 == 0 && progress != null)
+                            progress.onUpdate(cardsProcessed[0], "Parsing cards…");
                     }
-
-                    String line = rawLine.trim();
-                    // Skip blank lines and bare array brackets from old format
-                    if (line.isEmpty() || line.equals("[") || line.equals("]")) continue;
-                    // Strip defensive old-format wrappers
-                    if (line.startsWith("[")) line = line.substring(1).trim();
-                    if (line.endsWith("]"))   line = line.substring(0, line.length() - 1).trim();
-                    if (line.endsWith(","))   line = line.substring(0, line.length() - 1).trim();
-                    if (line.isEmpty() || !line.startsWith("{")) continue;
-
-                    try {
-                        JSONObject cardJson = new JSONObject(line);
-
-                        // Index English, non-digital printings only
-                        if ("en".equals(cardJson.optString("lang"))
-                                && !cardJson.optBoolean("digital", false)) {
-                            processCardJson(cardJson, newIndex, cacheWriter);
-                            cardsProcessed++;
-
-                            if (cardsProcessed % 5_000 == 0 && progress != null) {
-                                progress.onUpdate(cardsProcessed, "Parsing cards\u2026");
-                            }
-                        }
-                    } catch (Exception ignored) {
-                        // Skip individual malformed lines without aborting the whole build
-                    }
-                }
+                });
 
                 cacheWriter.flush();
+                if (cacheWriter.checkError()) throw new IOException("Catalog write failed");
                 if (progress != null) {
-                    progress.onUpdate(cardsProcessed, "Saving catalog to disk\u2026");
+                    progress.onUpdate(cardsProcessed[0], "Saving catalog to disk\u2026");
                 }
             }
         } finally {
             if (conn != null) conn.disconnect();
         }
 
-        // Step 3 — atomically replace the old cache file
-        if (cacheFile.exists()) cacheFile.delete();
-        if (!tmpFile.renameTo(cacheFile)) {
-            // Fallback for cross-device moves (e.g. temp dir on a different drive)
-            try (InputStream  in  = new FileInputStream(tmpFile);
-                 OutputStream out = new FileOutputStream(cacheFile)) {
-                in.transferTo(out);
-            }
-            tmpFile.delete();
+        if (newIndex.isEmpty()) throw new IOException("Empty catalog; previous cache retained");
+        if (progress != null && progress.isCancelled()) throw new InterruptedException("Catalog refresh cancelled");
+        // Read through gzip EOF to verify the completed footer and every serialized record.
+        int verified=0;
+        try (var verify=new BufferedReader(new InputStreamReader(new GZIPInputStream(new FileInputStream(tmpFile)),StandardCharsets.UTF_8))) {
+            String record;
+            while ((record=verify.readLine())!=null) { ProviderCardMapper.fromJson(new JSONObject(record)); verified++; }
         }
+        if (verified!=newIndex.size()) throw new IOException("Catalog count mismatch; previous cache retained");
+        com.cardpricer.util.AtomicFiles.replace(tmpFile.toPath(), cacheFile.toPath());
 
         this.index     = Collections.unmodifiableMap(newIndex);
         this.cardCount = newIndex.size();
+        this.ambiguousLegacyKeys = 0;
 
         if (progress != null) {
             progress.onUpdate(this.cardCount,
                     "Done \u2014 " + this.cardCount + " cards indexed.");
+        }
+        } finally {
+            java.nio.file.Files.deleteIfExists(tmpFile.toPath());
         }
     }
 
@@ -365,10 +380,10 @@ public class ScryfallCatalogService {
     }
 
     private static HttpURLConnection openConnection(String url) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URI(url).toURL().openConnection();
-        conn.setRequestProperty("User-Agent", USER_AGENT);
+        HttpURLConnection conn = ProviderRequests.open(url);
+
         conn.setConnectTimeout(30_000);
-        conn.setReadTimeout(180_000); // bulk file is large — allow up to 3 min
+        conn.setReadTimeout(30_000);
         return conn;
     }
 
@@ -376,109 +391,14 @@ public class ScryfallCatalogService {
      * Parses one card JSON object from the Scryfall bulk array, adds it to the
      * in-memory index, and appends a compact line to the NDJSON.gz cache writer.
      *
-     * <p>PLST cards are stored with the <em>source</em> set code and collector
-     * number (e.g. setCode="ARB", collNum="1") to match the behaviour of
-     * {@link ScryfallApiService#parseCardFromJson}, while the index key uses the
-     * full PLST composite number (e.g. {@code "PLST:ARB-1"}).
+     * Exact provider set and collector identifiers are retained, including PLST composites.
      */
-    private static void processCardJson(JSONObject json,
-                                        Map<String, Card> index,
-                                        PrintWriter cacheWriter) {
-        try {
-            String rawSet  = json.getString("set");               // "tdm", "plst", "lea"
-            String rawColl = json.getString("collector_number");  // "3", "ARB-1", "73★"
-            String name    = json.getString("name");
-            String rarity  = json.optString("rarity", "common");
-            boolean reserved = json.optBoolean("reserved", false);
-
-            // ── Set code and collector number normalisation ────────────────────
-            String setCode; // stored in Card and cache
-            String collNum; // stored in Card and cache
-            String key;     // index key
-
-            if ("plst".equals(rawSet)) {
-                // PLST composite collector numbers are "SET-NUM", e.g. "ARB-1"
-                int hyphen = rawColl.lastIndexOf('-');
-                if (hyphen <= 0) return; // malformed — skip
-                setCode = rawColl.substring(0, hyphen).toUpperCase(); // "ARB"
-                collNum = rawColl.substring(hyphen + 1);              // "1"
-                key     = "PLST:" + rawColl.toUpperCase();            // "PLST:ARB-1"
-            } else {
-                setCode = rawSet.toUpperCase();                                // "TDM"
-                collNum = rawColl.replaceAll("[^0-9A-Za-z\\-]", "");           // "73" (strips ★)
-                key     = setCode + ":" + collNum.toUpperCase();               // "TDM:3"
-            }
-
-            // ── Prices ────────────────────────────────────────────────────────
-            String normalPrice  = null;
-            String foilPrice    = null;
-            String etchedPrice  = null;
-            if (json.has("prices")) {
-                JSONObject prices = json.getJSONObject("prices");
-                if (!prices.isNull("usd"))        normalPrice  = prices.getString("usd");
-                if (!prices.isNull("usd_foil"))   foilPrice    = prices.getString("usd_foil");
-                if (!prices.isNull("usd_etched")) etchedPrice  = prices.getString("usd_etched");
-            }
-
-            // ── Frame effects ─────────────────────────────────────────────────
-            List<String> frameEffects = new ArrayList<>();
-            if (json.has("frame_effects")) {
-                JSONArray fxArr = json.getJSONArray("frame_effects");
-                for (int i = 0; i < fxArr.length(); i++) frameEffects.add(fxArr.getString(i));
-            }
-
-            // ── Image URL ─────────────────────────────────────────────────────
-            String imageUrl = null;
-            if (json.has("image_uris")) {
-                JSONObject iu = json.getJSONObject("image_uris");
-                if (iu.has("normal")) imageUrl = iu.getString("normal");
-            } else if (json.has("card_faces")) {
-                JSONArray faces = json.getJSONArray("card_faces");
-                if (faces.length() > 0) {
-                    JSONObject front = faces.getJSONObject(0);
-                    if (front.has("image_uris")) {
-                        JSONObject iu = front.getJSONObject("image_uris");
-                        if (iu.has("normal")) imageUrl = iu.getString("normal");
-                    }
-                }
-            }
-
-            // ── Build Card object ─────────────────────────────────────────────
-            Card card = new Card();
-            card.setName(name);
-            card.setSetCode(setCode);
-            card.setCollectorNumber(collNum);
-            card.setRarity(rarity);
-            card.setPrice(normalPrice);
-            card.setFoilPrice(foilPrice);
-            card.setEtchedPrice(etchedPrice);
-            card.setReserved(reserved);
-            if (!frameEffects.isEmpty()) card.setFrameEffects(frameEffects);
-            if (imageUrl != null) card.setImageUrl(imageUrl);
-
-            index.put(key, card);
-
-            // ── Write compact NDJSON cache line ───────────────────────────────
-            JSONObject cacheObj = new JSONObject();
-            cacheObj.put("k",  key);
-            cacheObj.put("nm", name);
-            cacheObj.put("s",  setCode);
-            cacheObj.put("n",  collNum);
-            cacheObj.put("r",  rarity);
-            if (normalPrice  != null) cacheObj.put("p",  normalPrice);
-            if (foilPrice    != null) cacheObj.put("fp", foilPrice);
-            if (etchedPrice  != null) cacheObj.put("ep", etchedPrice);
-            if (reserved)             cacheObj.put("rl", true);
-            if (!frameEffects.isEmpty()) {
-                JSONArray fxArr = new JSONArray();
-                frameEffects.forEach(fxArr::put);
-                cacheObj.put("fx", fxArr);
-            }
-            if (imageUrl != null) cacheObj.put("i", imageUrl);
-            cacheWriter.println(cacheObj);
-
-        } catch (Exception ignored) {
-            // Skip individual malformed entries without aborting the whole build
-        }
+    private static void processCardJson(JSONObject json, Map<String, com.cardpricer.model.ProviderPrinting> index, PrintWriter cacheWriter) {
+        Card card = ProviderCardMapper.fromJson(json);
+        String key = buildKey(card.getSetCode(), card.getCollectorNumber());
+        var previous = index.putIfAbsent(key, com.cardpricer.model.ProviderPrinting.from(card));
+        if (previous != null && !previous.identity().providerId().equals(card.getProviderId()))
+            throw new IllegalArgumentException("Ambiguous printing identity: " + key);
+        if (previous == null) cacheWriter.println(ProviderCardMapper.toJson(card));
     }
 }

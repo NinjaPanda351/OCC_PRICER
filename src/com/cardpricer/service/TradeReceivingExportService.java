@@ -1,13 +1,18 @@
 package com.cardpricer.service;
 
-import com.cardpricer.gui.panel.PreferencesPanel;
+
 import com.cardpricer.model.Card;
 import com.cardpricer.model.TradeItem;
 import com.cardpricer.util.CardConstants;
 
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Locale;
+import java.util.function.Consumer;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -20,16 +25,22 @@ import java.util.List;
  */
 public class TradeReceivingExportService {
 
-    private static final String DATA_DIRECTORY =
-            com.cardpricer.util.AppDataDirectory.tradesPath();
+    private final Path dataDirectory;
+    private final Consumer<String> sharedPublisher;
 
-    private final PricingService pricingService = new PricingService();
+    public TradeReceivingExportService() {
+        this(com.cardpricer.util.AppDataDirectory.trades().toPath(),
+                TradeReceivingExportService::copyToSharedFolder);
+    }
 
-    private void ensureDataDirectoryExists() {
-        java.io.File dataDir = new java.io.File(DATA_DIRECTORY);
-        if (!dataDir.exists()) {
-            dataDir.mkdirs();
-        }
+    /** Explicit destinations keep file generation independent of workstation preferences. */
+    public TradeReceivingExportService(Path dataDirectory, Consumer<String> sharedPublisher) {
+        this.dataDirectory = java.util.Objects.requireNonNull(dataDirectory);
+        this.sharedPublisher = java.util.Objects.requireNonNull(sharedPublisher);
+    }
+
+    private void ensureDataDirectoryExists() throws IOException {
+        Files.createDirectories(dataDirectory);
     }
 
     // Dedicated daemon thread for all shared-folder I/O so it never blocks the EDT.
@@ -45,65 +56,39 @@ public class TradeReceivingExportService {
      * Returns immediately — the caller (EDT) is never blocked.  The copy is
      * best-effort; all failures are logged but never propagated.
      */
-    private static void copyToSharedFolder(String localFilePath) {
-        String path = PreferencesPanel.getSharedTradesFolder();
-        if (path == null || path.isBlank()) return;
-
-        SHARED_FOLDER_EXECUTOR.submit(() -> {
-            try {
-                java.io.File dir = new java.io.File(path);
-                if (!dir.exists() || !dir.isDirectory()) {
-                    System.err.println("[SharedFolder] Path not accessible: " + path);
-                    return;
-                }
-                java.io.File src  = new java.io.File(localFilePath);
-                java.io.File dest = new java.io.File(dir, src.getName());
-                java.nio.file.Files.copy(src.toPath(), dest.toPath(),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                System.out.println("Copied to shared folder: " + dest.getAbsolutePath());
-            } catch (Exception e) {
-                System.err.println("[SharedFolder] Failed to copy file: " + e.getMessage());
-            }
-        });
-    }
+    private static void copyToSharedFolder(String localFilePath) { syncMissingToSharedFolder(); }
 
     /**
      * Queues a background sync of any local trade files not yet present (or smaller than
      * the local copy) in the shared folder.  Returns immediately — safe to call on the EDT
      * at startup.  Useful for catching files that were missed when the network was down.
      */
-    public static void syncMissingToSharedFolder() {
-        String sharedPath = PreferencesPanel.getSharedTradesFolder();
-        if (sharedPath == null || sharedPath.isBlank()) return;
-
+    public static void syncMissingToSharedFolder() { syncMissingToSharedFolder(false); }
+    private static final java.util.concurrent.atomic.AtomicBoolean SYNC_RUNNING = new java.util.concurrent.atomic.AtomicBoolean();
+    private static final java.util.concurrent.atomic.AtomicBoolean FORCE_RETRY = new java.util.concurrent.atomic.AtomicBoolean();
+    public static void syncMissingToSharedFolder(boolean force) {
+        InventoryStatusSyncService.requestSync();
+        String shared=java.util.prefs.Preferences.userRoot().node("/com/cardpricer/gui/panel").get("shared.trades.folder", "");
+        if (shared.isBlank()) { sharedSyncStatus="saved locally"; return; }
+        if (force) FORCE_RETRY.set(true);
+        if (!SYNC_RUNNING.compareAndSet(false,true)) return;
+        sharedSyncStatus="pending sync";
         SHARED_FOLDER_EXECUTOR.submit(() -> {
             try {
-                java.io.File sharedDir = new java.io.File(sharedPath);
-                if (!sharedDir.exists() || !sharedDir.isDirectory()) {
-                    System.err.println("[SharedFolder] Startup sync skipped — not accessible: " + sharedPath);
-                    return;
+                Path local=com.cardpricer.util.AppDataDirectory.trades().toPath();
+                var sync=new SharedFolderSyncService(com.cardpricer.util.AppDataDirectory.root().toPath().resolve("ledger/trades.sqlite"));
+                try (var files=Files.list(local)) {
+                    for (Path file:files.filter(Files::isRegularFile).toList())
+                        sync.enqueue(file,Path.of(shared).resolve(file.getFileName()));
                 }
-                java.io.File localDir = com.cardpricer.util.AppDataDirectory.trades();
-                java.io.File[] localFiles = localDir.listFiles(java.io.File::isFile);
-                if (localFiles == null || localFiles.length == 0) return;
-
-                int synced = 0;
-                for (java.io.File src : localFiles) {
-                    java.io.File dest = new java.io.File(sharedDir, src.getName());
-                    if (!dest.exists() || dest.length() < src.length()) {
-                        java.nio.file.Files.copy(src.toPath(), dest.toPath(),
-                                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                        synced++;
-                    }
-                }
-                if (synced > 0) {
-                    System.out.println("[SharedFolder] Startup sync: copied " + synced + " missing file(s).");
-                }
-            } catch (Exception e) {
-                System.err.println("[SharedFolder] Startup sync failed: " + e.getMessage());
-            }
+                int pending=sync.retry(FORCE_RETRY.getAndSet(false));
+                sharedSyncStatus=pending==0 ? "synced" : pending+" output(s) pending sync or in conflict";
+            } catch (Exception e) { sharedSyncStatus="pending sync: "+e.getMessage(); }
+            finally { SYNC_RUNNING.set(false); }
         });
     }
+    private static volatile String sharedSyncStatus="saved locally";
+    public static String getSharedSyncStatus() { return sharedSyncStatus; }
 
     /**
      * Exports received cards to POS inventory import CSV format using table values.
@@ -118,94 +103,37 @@ public class TradeReceivingExportService {
      * @param traderName  name of the trader/source
      * @param unitPrices  actual unit prices from the table (already condition-adjusted)
      * @param quantities  actual quantities from the table
-     * @param paymentType payment type: {@code "credit"} (50%), {@code "check"} (33%),
-     *                    {@code "partial"} (~41.67%), or {@code "inventory"} (0%)
+     * @param paymentType payment type: {@code "credit"} (50%), {@code "check"} (40%),
+     *                    {@code "partial"} (requires approved settlement), or {@code "inventory"} (0%)
      * @return the filename of the exported CSV
      */
     public String exportToPOSFormat(List<TradeItem> items, String traderName, String customerName,
                                     List<BigDecimal> unitPrices, List<Integer> quantities,
                                     String paymentType) throws IOException {
-        ensureDataDirectoryExists();
-
-        String timestamp = LocalDateTime.now().format(
-                DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
-        String safeCustomer = sanitizeFilename(customerName.isEmpty() ? "UNKNOWN" : customerName).toUpperCase();
-        String safeTrader  = sanitizeFilename(traderName.isEmpty()  ? "UNKNOWN" : traderName).toUpperCase();
-        String filename = String.format("%s/%s_%s_%s.csv",
-                DATA_DIRECTORY, timestamp, safeCustomer, safeTrader);
-
-        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
-            // Write header
-            writer.println("LINE NO,DEPARTMENT,CATEGORY,TYPE,CODE,ITEM TYPE,ORDER NO," +
-                    "DESCRIPTION,UOM,QTY ON ORD,RESTOCK LEVEL,REORDER POINT," +
-                    "QTY ON HAND,COST,DISCOUNT,BID,EXTENDED COST,TAX CODE,PRICE");
-
-            int lineNo = 1;
-            for (int i = 0; i < items.size(); i++) {
-                TradeItem item = items.get(i);
-                Card card = item.getCard();
-
-                // Build code with finish indicator
-                StringBuilder codeBuilder = new StringBuilder();
-                codeBuilder.append(card.getSetCode())
-                        .append(" ")
-                        .append(card.getCollectorNumber());
-
-                if (item.isFoil()) {
-                    codeBuilder.append("F"); // Generic foil/etched indicator
-                }
-
-                String code = codeBuilder.toString();
-
-                // Build description
-                StringBuilder descBuilder = new StringBuilder();
-                descBuilder.append(card.getName());
-
-                if (item.isFoil()) {
-                    descBuilder.append(" (Foil)");
-                }
-
-                String description = escapeCSV(descBuilder.toString());
-
-                // Use actual table values
-                int qtyOnOrder = quantities.get(i);
-                BigDecimal price = unitPrices.get(i); // Market price
-
-                // Calculate cost based on payment type
-                BigDecimal cost;
-                if ("inventory".equalsIgnoreCase(paymentType)) {
-                    cost = BigDecimal.ZERO; // Inventory = no cost
-                } else if ("check".equalsIgnoreCase(paymentType)) {
-                    cost = price.divide(CardConstants.PAYMENT_DIVISOR_CHECK, 2, java.math.RoundingMode.HALF_UP);
-                } else if ("partial".equalsIgnoreCase(paymentType)) {
-                    // Partial payment: weighted average of credit (50%) and check (33.33%) ≈ 41.67%
-                    cost = price.multiply(CardConstants.PAYMENT_RATE_PARTIAL).setScale(2, java.math.RoundingMode.HALF_UP);
-                } else {
-                    // Default to store credit
-                    cost = price.multiply(CardConstants.PAYMENT_RATE_CREDIT).setScale(2, java.math.RoundingMode.HALF_UP);
-                }
-
-                BigDecimal extendedCost = cost.multiply(BigDecimal.valueOf(qtyOnOrder));
-
-                // LINE NO,DEPARTMENT,CATEGORY,TYPE,CODE,ITEM TYPE,ORDER NO,DESCRIPTION,UOM,
-                // QTY ON ORD,RESTOCK LEVEL,REORDER POINT,QTY ON HAND,COST,DISCOUNT,BID,
-                // EXTENDED COST,TAX CODE,PRICE
-                writer.printf("%d,5,5.2,,%s,,%s,%s,,%d,,,%.2f,,,%.2f,TAX,%.2f%n",
-                        lineNo++,               // LINE NO
-                        code,                   // CODE (required)
-                        "",                     // ORDER NO
-                        quoteIfNeeded(description), // DESCRIPTION
-                        qtyOnOrder,             // QTY ON ORD (required)
-                        cost,                   // COST (required)
-                        extendedCost,           // EXTENDED COST
-                        price                   // PRICE
-                );
-            }
+        if ("partial".equals(paymentType))
+            throw new IllegalArgumentException("A split export requires an approved settlement");
+        List<SettlementEngine.Line> lines = new java.util.ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            BigDecimal qty = BigDecimal.valueOf(quantities.get(i));
+            BigDecimal price = unitPrices.get(i);
+            lines.add(new SettlementEngine.Line(Integer.toString(i), quantities.get(i), price.multiply(qty),
+                    price.multiply(new BigDecimal("0.50")).setScale(2, java.math.RoundingMode.HALF_UP).multiply(qty),
+                    price.multiply(new BigDecimal("0.40")).setScale(2, java.math.RoundingMode.HALF_UP).multiply(qty),
+                    !"MISC".equalsIgnoreCase(items.get(i).getCard().getSetCode())));
         }
+        return exportToPOSFormat(items, traderName, customerName, unitPrices,
+                new SettlementEngine().settle(lines, paymentType, BigDecimal.ZERO, BigDecimal.ZERO));
+    }
 
-        System.out.println("POS import file created: " + filename);
-        copyToSharedFolder(filename);
-        return filename;
+    public String exportToPOSFormat(List<TradeItem> items, String traderName, String customerName,
+                                    List<BigDecimal> unitPrices, SettlementEngine.Settlement settlement) throws IOException {
+        java.io.StringWriter content = new java.io.StringWriter();
+        TradePosEncoder.write(content, items, unitPrices, settlement);
+        ensureDataDirectoryExists();
+        Path file = dataDirectory.resolve("trade_" + java.util.UUID.randomUUID() + ".csv");
+        Files.writeString(file, content.toString(), StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE_NEW);
+        sharedPublisher.accept(file.toString());
+        return file.toString();
     }
 
     /**
@@ -233,15 +161,10 @@ public class TradeReceivingExportService {
                                BigDecimal tierCreditTotal, BigDecimal tierCheckTotal) throws IOException {
         ensureDataDirectoryExists();
 
-        // New format: YYYY-MM-DD_HH-MM-SS_CUSTOMER_NAME
-        LocalDateTime now = LocalDateTime.now();
-        String timestamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
-        String safeCustomer = sanitizeFilename(customerName.isEmpty() ? "UNKNOWN" : customerName).toUpperCase();
-        String safeTrader   = sanitizeFilename(traderName == null || traderName.isEmpty() ? "UNKNOWN" : traderName).toUpperCase();
-        String filename = String.format("%s/%s_%s_%s.txt",
-                DATA_DIRECTORY, timestamp, safeCustomer, safeTrader);
+        String filename = dataDirectory.resolve(TradeApplicationService.filenamePrefix(
+                LocalDateTime.now(),customerName,traderName,java.util.UUID.randomUUID()) + ".txt").toString();
 
-        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+        try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(Path.of(filename), StandardCharsets.UTF_8))) {
             writer.println("╔════════════════════════════════════════════════════════════╗");
             writer.println("║          RECEIVED CARDS LIST - OCC CARD PRICER             ║");
             writer.println("╚════════════════════════════════════════════════════════════╝");
@@ -263,7 +186,7 @@ public class TradeReceivingExportService {
                 totalValue = totalValue.add(rowTotal);
             }
 
-            writer.printf("Total Value: $%.2f%n", totalValue);
+            writer.printf(Locale.ROOT, "Total Value: $%.2f%n", totalValue);
 
             // Payment method and payout breakdown
             BigDecimal safeCredit = tierCreditTotal != null ? tierCreditTotal : BigDecimal.ZERO;
@@ -273,16 +196,16 @@ public class TradeReceivingExportService {
                     BigDecimal safeCreditAmt = partialCreditAmount != null ? partialCreditAmount : BigDecimal.ZERO;
                     BigDecimal safeCheckAmt  = partialCheckAmount  != null ? partialCheckAmount  : BigDecimal.ZERO;
                     writer.println("Payment Method: Partial (Split)");
-                    writer.printf("  Store Credit Payout : $%.2f%n", safeCreditAmt);
-                    writer.printf("  Check Payout        : $%.2f%n", safeCheckAmt);
-                    writer.printf("  Total Payout        : $%.2f%n", safeCreditAmt.add(safeCheckAmt));
+                    writer.printf(Locale.ROOT, "  Store Credit Payout : $%.2f%n", safeCreditAmt);
+                    writer.printf(Locale.ROOT, "  Check Payout        : $%.2f%n", safeCheckAmt);
+                    writer.printf(Locale.ROOT, "  Total Payout        : $%.2f%n", safeCreditAmt.add(safeCheckAmt));
                     if (checkNumber != null && !checkNumber.isEmpty()) {
                         writer.println("  Check Number        : " + checkNumber);
                     }
                     break;
                 case "check":
                     writer.println("Payment Method: Check");
-                    writer.printf("Payout: $%.2f%n", safeCheck);
+                    writer.printf(Locale.ROOT, "Payout: $%.2f%n", safeCheck);
                     if (checkNumber != null && !checkNumber.isEmpty()) {
                         writer.println("Check Number: " + checkNumber);
                     }
@@ -292,14 +215,14 @@ public class TradeReceivingExportService {
                     break;
                 default: // "credit"
                     writer.println("Payment Method: Store Credit");
-                    writer.printf("Payout: $%.2f%n", safeCredit);
+                    writer.printf(Locale.ROOT, "Payout: $%.2f%n", safeCredit);
                     break;
             }
 
             writer.println("\n" + "=".repeat(78));
             writer.println("CARD LIST");
             writer.println("=".repeat(78));
-            writer.printf("%-50s %-10s %-8s %-5s %-10s%n",
+            writer.printf(Locale.ROOT, "%-50s %-10s %-8s %-5s %-10s%n",
                     "Card Name", "Unit Price", "Condition", "Qty", "Total");
             writer.println("-".repeat(78));
 
@@ -318,8 +241,8 @@ public class TradeReceivingExportService {
                 BigDecimal unitPrice = unitPrices.get(i);
                 BigDecimal rowTotal = unitPrice.multiply(BigDecimal.valueOf(qty));
 
-                writer.printf("%-50s $%-9.2f %-8s %-5d $%-9.2f%n",
-                        truncate(nameBuilder.toString(), 50),
+                writer.printf(Locale.ROOT, "%-50s $%-9.2f %-8s %-5d $%-9.2f%n",
+                        nameBuilder + " [" + item.getSetCollectorCode() + "]",
                         unitPrice,
                         condition,
                         qty,
@@ -327,10 +250,11 @@ public class TradeReceivingExportService {
             }
 
             writer.println("-".repeat(78));
+            if (writer.checkError()) throw new IOException("Could not write receipt: " + filename);
         }
 
         System.out.println("Card list saved: " + filename);
-        copyToSharedFolder(filename);
+        sharedPublisher.accept(filename);
         return filename;
     }
 
@@ -341,7 +265,7 @@ public class TradeReceivingExportService {
         if (filename == null || filename.isEmpty()) {
             return "unknown";
         }
-        return filename.replaceAll("[^a-zA-Z0-9._-]", "_").toLowerCase();
+        return filename.replaceAll("[^a-zA-Z0-9._-]", "_").toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -352,33 +276,6 @@ public class TradeReceivingExportService {
             return str;
         }
         return str.substring(0, length - 3) + "...";
-    }
-
-    /**
-     * Escapes special characters in CSV values.
-     */
-    private String escapeCSV(String value) {
-        if (value == null) {
-            return "";
-        }
-        // Replace commas with ɕ to avoid CSV parsing issues
-        // Replace quotes with double quotes for proper CSV escaping
-        return value.replace(",", "ɕ").replace("\"", "\"\"");
-    }
-
-    /**
-     * Quotes a string if it contains special characters.
-     */
-    private String quoteIfNeeded(String value) {
-        if (value == null) {
-            return "";
-        }
-        String escaped = escapeCSV(value);
-        // Only quote if contains quotes (commas are already replaced)
-        if (escaped.contains("\"")) {
-            return "\"" + escaped + "\"";
-        }
-        return escaped;
     }
 
     /**
@@ -398,10 +295,10 @@ public class TradeReceivingExportService {
                                           List<Integer> quantities) throws IOException {
         ensureDataDirectoryExists();
 
-        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-        String filename = String.format("%s/inventory_from_trade_%s.csv", DATA_DIRECTORY, timestamp);
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + "_" + java.util.UUID.randomUUID();
+        String filename = String.format("%s/inventory_from_trade_%s.csv", dataDirectory, timestamp);
 
-        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+        try (Writer writer = Files.newBufferedWriter(Path.of(filename), StandardCharsets.UTF_8)) {
             // No header for Item Wizard Change Qty format
 
             for (int i = 0; i < items.size(); i++) {
@@ -415,35 +312,18 @@ public class TradeReceivingExportService {
 
                 String code = card.getSetCode() + " " + card.getCollectorNumber();
                 if (item.isFoil()) {
-                    code += "F";
+                    code += item.getFinishType();
                 }
 
                 String cardName = card.getName();
                 String artist = card.getArtist() != null ? card.getArtist() : "";
                 int quantity = i < quantities.size() ? quantities.get(i) : 1;
 
-                writer.println(formatChangeQtyRow(code, cardName, artist, quantity));
+                CsvRows.write(writer, code, cardName, artist, "", quantity);
             }
         }
 
         return filename;
     }
 
-    /**
-     * Formats a row for Item Wizard Change Qty format.
-     * Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
-     */
-    private String formatChangeQtyRow(String code, String cardName, String artist, int newQty) {
-        // Replace commas with ɕ to avoid CSV parsing issues
-        String escapedName = cardName.replace(",", "ɕ").replace("\"", "\"\"");
-        String escapedArtist = artist.replace(",", "ɕ").replace("\"", "\"\"");
-
-        // Format: CODE,DESCRIPTION,EXTENDED DESCRIPTION,ON_HAND-QTY,NEW ON-HAND QTY
-        // We leave ON_HAND-QTY empty (they'll fill it in from current inventory)
-        return String.format("%s,%s,%s,,%d",
-                code,
-                escapedName,
-                escapedArtist,
-                newQty);
-    }
 }

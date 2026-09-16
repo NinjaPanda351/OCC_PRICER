@@ -3,186 +3,76 @@ package com.cardpricer.service;
 import com.cardpricer.model.Card;
 import com.cardpricer.model.CardEntry;
 import com.cardpricer.model.OrderItem;
-
-import java.io.FileWriter;
+import com.cardpricer.util.AppDataDirectory;
 import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.Writer;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Exports card data and order invoices to CSV files in various POS-import formats.
- * Output files are written to the application data directory managed by
- * {@link com.cardpricer.util.AppDataDirectory}.
- */
+/** Writes catalog exports and invoices to UTF-8 CSV files. */
 public class CsvExportService {
+    private final Path dataDirectory;
+    private final Path pricesDirectory;
 
-    private static final String DATA_DIRECTORY    = com.cardpricer.util.AppDataDirectory.root().getAbsolutePath();
-    private static final String PRICES_DIRECTORY  = com.cardpricer.util.AppDataDirectory.pricesPath();
-
-    /**
-     * Supported CSV export formats.
-     * <ul>
-     *   <li>{@code IMPORT_UTILITY} — full format with department, category, artist, rarity, and tax</li>
-     *   <li>{@code ITEM_WIZARD} — simplified Item Wizard format with placeholder fields</li>
-     *   <li>{@code ITEM_WIZARD_CHANGE_QTY_ZERO} — Item Wizard change-qty format, zeroing on-hand quantities</li>
-     *   <li>{@code TRADE} — trade-specific export format</li>
-     * </ul>
-     */
     public enum ExportFormat {
-        IMPORT_UTILITY,
-        ITEM_WIZARD,
-        ITEM_WIZARD_CHANGE_QTY_ZERO,
-        TRADE
+        IMPORT_UTILITY, ITEM_WIZARD, ITEM_WIZARD_CHANGE_QTY_ZERO
     }
 
-    /**
-     * Ensures the data directory exists
-     */
-    private void ensureDataDirectoryExists() {
-        java.io.File dataDir = new java.io.File(DATA_DIRECTORY);
-        if (!dataDir.exists()) {
-            dataDir.mkdir();
-        }
-
-        java.io.File pricesDir = new java.io.File(PRICES_DIRECTORY);
-        if (!pricesDir.exists()) {
-            pricesDir.mkdir();
-        }
+    public CsvExportService() {
+        this(AppDataDirectory.root().toPath());
     }
 
-    /**
-     * Exports cards to CSV in the specified format
-     * Each card gets 1-2 rows (normal and foil if available)
-     * Files are saved to the data directory
-     *
-     * @param cards List of cards to export
-     * @param filename Output filename
-     * @param format Export format (IMPORT_UTILITY or ITEM_WIZARD)
-     * @throws IOException if file cannot be written
-     */
+    /** Explicit storage location, also allowing tests to avoid user data. */
+    public CsvExportService(Path dataDirectory) {
+        this.dataDirectory = dataDirectory;
+        this.pricesDirectory = dataDirectory.resolve("prices");
+    }
+
     public void exportCardsToCsv(List<Card> cards, String filename, ExportFormat format) throws IOException {
-        ensureDataDirectoryExists();
-        String fullPath = PRICES_DIRECTORY + "/" + filename;
-
-        // Convert cards to flattened entries
-        List<CardEntry> entries = flattenCards(cards);
-
-        try (PrintWriter writer = new PrintWriter(new FileWriter(fullPath))) {
-            // Write header based on format
-            if (format == ExportFormat.IMPORT_UTILITY) {
-                writer.println("DEPARTMENT,CATEGORY,CODE,DESCRIPTION,EXTENDED DESCRIPTION,SUB DESCRIPTION,TAX,PRICE");
-            }
-            // Item Wizard format has no header
-
-            // Write each entry
-            for (CardEntry entry : entries) {
-                if (format == ExportFormat.IMPORT_UTILITY) {
-                    writer.println(entry.toImportUtilityRow());
-                } else {
-                    writer.println(entry.toItemWizardRow());
-                }
-            }
+        Files.createDirectories(pricesDirectory);
+        try (Writer writer = Files.newBufferedWriter(pricesDirectory.resolve(filename), StandardCharsets.UTF_8)) {
+            CardCsvEncoder.write(writer, flattenCards(cards), format);
         }
-
-        System.out.println("Exported " + entries.size() + " card entries to " + fullPath);
     }
 
-    /**
-     * Exports cards to CSV using the Import Utility format (default).
-     *
-     * @param cards    list of cards to export
-     * @param filename output filename (written inside the prices directory)
-     * @throws IOException if the file cannot be written
-     */
     public void exportCardsToCsv(List<Card> cards, String filename) throws IOException {
         exportCardsToCsv(cards, filename, ExportFormat.IMPORT_UTILITY);
     }
 
-    /**
-     * Converts a list of Cards into flattened CardEntry objects
-     * Each card becomes 1-2 entries depending on price availability
-     *
-     * @param cards List of cards to flatten
-     * @return List of card entries ready for export
-     */
-    private List<CardEntry> flattenCards(List<Card> cards) {
+    public static List<CardEntry> flattenCards(List<Card> cards) {
         List<CardEntry> entries = new ArrayList<>();
-
         for (Card card : cards) {
-            // Add normal version if it has a price
-            if (card.hasNormalPrice()) {
-                CardEntry normalEntry = new CardEntry(card, false);
-                entries.add(normalEntry);
-            }
-
-            // Add foil version if it has a price
-            if (card.hasFoilPrice()) {
-                CardEntry foilEntry = new CardEntry(card, true);
-                entries.add(foilEntry);
-            }
+            if (card.hasNormalPrice()) entries.add(new CardEntry(card, false));
+            if (card.hasFoilPrice()) entries.add(new CardEntry(card, true));
+            if (card.hasEtchedPrice()) entries.add(new CardEntry(card.getSetCode()+" "+card.getCollectorNumber()+"e",
+                    card.getName(),card.getEtchedPriceAsBigDecimal(),card.getRarity(),card.getArtist()));
         }
-
         return entries;
     }
 
-    /**
-     * Exports an order/invoice to CSV format
-     * Files are saved to the data directory
-     *
-     * @param items List of order items
-     * @param filename Output filename
-     * @throws IOException if file cannot be written
-     */
     public void exportInvoiceToCsv(List<OrderItem> items, String filename) throws IOException {
-        ensureDataDirectoryExists();
-        String fullPath = DATA_DIRECTORY + "/" + filename;
-
-        try (PrintWriter writer = new PrintWriter(new FileWriter(fullPath))) {
-            // Write header
-            writer.println("Set Collector Code,Card Name,Finish,Quantity,Unit Price,Total Price");
-
-            BigDecimal grandTotal = BigDecimal.ZERO;
-            int totalQuantity = 0;
-
-            // Write order items
-            for (OrderItem item : items) {
-                Card card = item.getCard();
-                String setCollectorCode = card.getSetCode() + " " +
-                        card.getCollectorNumber() +
-                        (item.isFoil() ? "f" : "");
-
-                writer.printf("\"%s\",\"%s\",%s,%d,%.2f,%.2f%n",
-                        setCollectorCode,
-                        escapeCSV(card.getName()),
-                        item.getFinish(),
-                        item.getQuantity(),
-                        item.getUnitPrice(),
-                        item.getTotalPrice());
-
-                grandTotal = grandTotal.add(item.getTotalPrice());
-                totalQuantity += item.getQuantity();
-            }
-
-            // Write total line
-            writer.printf("TOTAL,,,,%d,,%.2f%n", totalQuantity, grandTotal);
+        Files.createDirectories(dataDirectory);
+        try (Writer writer = Files.newBufferedWriter(dataDirectory.resolve(filename), StandardCharsets.UTF_8)) {
+            writeInvoice(writer, items);
         }
-
-        System.out.println("Invoice exported to " + fullPath);
     }
 
-    /**
-     * Escapes special characters in CSV values
-     * Handles quotes by doubling them
-     *
-     * @param value The string to escape
-     * @return Escaped string safe for CSV
-     */
-    private String escapeCSV(String value) {
-        if (value == null) {
-            return "";
+    public static void writeInvoice(Writer writer, List<OrderItem> items) throws IOException {
+        CsvRows.write(writer, "Set Collector Code", "Card Name", "Finish", "Quantity", "Unit Price", "Total Price");
+        BigDecimal grandTotal = BigDecimal.ZERO;
+        int totalQuantity = 0;
+        for (OrderItem item : items) {
+            Card card = item.getCard();
+            String code = card.getSetCode() + " " + card.getCollectorNumber() + (item.isFoil() ? "f" : "");
+            CsvRows.write(writer, code, card.getName(), item.getFinish(), item.getQuantity(),
+                    CsvRows.money(item.getUnitPrice()), CsvRows.money(item.getTotalPrice()));
+            grandTotal = grandTotal.add(item.getTotalPrice());
+            totalQuantity += item.getQuantity();
         }
-        return value.replace("\"", "\"\"");
+        CsvRows.write(writer, "TOTAL", "", "", totalQuantity, "", CsvRows.money(grandTotal));
     }
 }

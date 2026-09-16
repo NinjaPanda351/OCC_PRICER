@@ -238,6 +238,11 @@ public class CardSearchDialog extends JDialog {
         return panel;
     }
 
+    public void setInitialSearch(String text) {
+        searchField.setText(text==null ? "" : text);
+        if (!searchField.getText().isBlank()) scheduleSearch();
+    }
+
     private void scheduleSearch() {
         if (searchTimer != null) {
             searchTimer.stop();
@@ -248,7 +253,14 @@ public class CardSearchDialog extends JDialog {
         searchTimer.start();
     }
 
+    private SwingWorker<?,?> activeSearch;
+    private long searchGeneration;
+
+    @Override public void dispose() { searchGeneration++; if (searchTimer!=null) searchTimer.stop(); if (activeSearch!=null) activeSearch.cancel(true); super.dispose(); }
+
     private void performSearch() {
+        long generation=++searchGeneration;
+        if (activeSearch!=null) activeSearch.cancel(true);
         String query = searchField.getText().trim();
 
         if (query.isEmpty() || query.length() < 2) {
@@ -261,14 +273,16 @@ public class CardSearchDialog extends JDialog {
         statusLabel.setText("Searching for \"" + query + "\"...");
         selectButton.setEnabled(false);
 
+        final String setFilter=setCodeField.getText().trim();
         SwingWorker<List<CardSearchResult>, Void> worker = new SwingWorker<>() {
             @Override
             protected List<CardSearchResult> doInBackground() throws Exception {
-                return searchCards(query);
+                return searchCards(setFilter.isEmpty() ? query : query+" set:"+VintageUtil.resolveSetAlias(setFilter));
             }
 
             @Override
             protected void done() {
+                if (generation!=searchGeneration || isCancelled() || !isDisplayable()) return;
                 try {
                     List<CardSearchResult> results = get();
                     displayResults(results);
@@ -279,17 +293,12 @@ public class CardSearchDialog extends JDialog {
             }
         };
 
-        worker.execute();
+        activeSearch=worker;
+        com.cardpricer.service.TaskCoordinator.execute(worker);
     }
 
     private List<CardSearchResult> searchCards(String query) throws Exception {
         List<CardSearchResult> results = new ArrayList<>();
-
-        // Append optional set filter before encoding; resolve name aliases first
-        String setCode = setCodeField.getText().trim();
-        if (!setCode.isEmpty()) {
-            query = query + " set:" + VintageUtil.resolveSetAlias(setCode);
-        }
 
         // Use Scryfall's search API with fuzzy name matching
         String encodedQuery = java.net.URLEncoder.encode(query, "UTF-8");

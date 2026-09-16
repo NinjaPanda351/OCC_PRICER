@@ -31,6 +31,8 @@ public final class BuyRateRule {
      * @throws IllegalArgumentException if either rate is outside (0, 1]
      */
     public BuyRateRule(BigDecimal thresholdMin, BigDecimal creditRate, BigDecimal checkRate) {
+        if (thresholdMin == null || thresholdMin.signum() < 0) throw new IllegalArgumentException("Threshold must be non-negative");
+        if (creditRate == null || checkRate == null) throw new IllegalArgumentException("Rates are required");
         if (creditRate.compareTo(BigDecimal.ZERO) <= 0 || creditRate.compareTo(BigDecimal.ONE) > 0) {
             throw new IllegalArgumentException("creditRate must be in (0, 1]: " + creditRate);
         }
@@ -50,7 +52,7 @@ public final class BuyRateRule {
      * @return whether this rule matches
      */
     public boolean matches(BigDecimal marketValue) {
-        return marketValue.compareTo(thresholdMin) > 0;
+        return marketValue.signum() >= 0 && (thresholdMin.signum() == 0 || marketValue.compareTo(thresholdMin) > 0);
     }
 
     @Override
