@@ -56,6 +56,10 @@ public class TradeHistoryService {
 
         if (sharedPath != null && !sharedPath.isBlank()) {
             loadFromDirectory(sharedPath, byFilename);
+            try {
+                for (TradeRecord record:SharedTradeService.history(java.nio.file.Path.of(sharedPath)))
+                    byFilename.merge(record.historyKey(),record,(old,next) -> next.revision>=old.revision ? next : old);
+            } catch (IOException failure) { throw new IllegalStateException("Could not load shared trade revisions",failure); }
         }
 
         List<TradeRecord> result = new ArrayList<>(byFilename.values());
@@ -147,12 +151,28 @@ public class TradeHistoryService {
         return new TradeRepository(java.nio.file.Path.of(localDirectory).resolveSibling("ledger").resolve("trades.sqlite"));
     }
 
+    public static com.cardpricer.model.TradeDraft openForEditing(TradeRecord record, String localDirectory, String sharedPath) throws Exception {
+        if (record.tradeId==null) throw new IllegalArgumentException("Use the receipt editor for this older trade");
+        var repo=repository(localDirectory);
+        if (sharedPath!=null && !sharedPath.isBlank())
+            return new SharedTradeService(repo,java.nio.file.Path.of(localDirectory),java.nio.file.Path.of(sharedPath)).open(record.tradeId,record.revision);
+        if (!repo.sharedSource(record.tradeId).isBlank())
+            throw new IOException("Reconnect this trade's Shared Trades Folder before editing.");
+        var draft=repo.committedDraft(record.tradeId);
+        if (draft==null) throw new IOException("Configure the Shared Trades Folder to open this trade on this workstation.");
+        if (draft.revision()!=record.revision) throw new IOException("This trade changed. Refresh History and reopen it.");
+        return draft;
+    }
+
     /** Fall back to the committed receipt when an output folder is temporarily unavailable. */
     public static String receiptContent(TradeRecord record, String localDirectory) throws Exception {
         if (record.tradeId != null) {
             var repo=repository(localDirectory);
             var draft=repo.committedDraft(record.tradeId);
             if (draft!=null && draft.revision()==record.revision) return repo.receiptContent(record.tradeId);
+            var parent=java.nio.file.Path.of(record.filename).toAbsolutePath().getParent();
+            String receipt=SharedTradeService.receipt(parent,record.tradeId,record.revision);
+            if (receipt!=null) return receipt;
         }
         return Files.readString(java.nio.file.Path.of(record.filename),StandardCharsets.UTF_8);
     }

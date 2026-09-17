@@ -37,6 +37,7 @@ public final class TradeRepository {
                     + "name TEXT NOT NULL, content TEXT NOT NULL, hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', "
                     + "attempts INTEGER NOT NULL DEFAULT 0, error TEXT, UNIQUE(trade_id,name))");
             s.execute("CREATE TABLE IF NOT EXISTS trade_versions(trade_id TEXT NOT NULL, revision INTEGER NOT NULL, snapshot TEXT NOT NULL, archived_at TEXT NOT NULL, PRIMARY KEY(trade_id,revision))");
+            s.execute("CREATE TABLE IF NOT EXISTS shared_trade_sources(trade_id TEXT PRIMARY KEY, folder TEXT NOT NULL)");
             s.execute("CREATE TABLE IF NOT EXISTS inventory_status(record_key TEXT PRIMARY KEY, revision INTEGER NOT NULL, inventoried INTEGER NOT NULL, updated_at TEXT NOT NULL)");
             s.execute("CREATE TABLE IF NOT EXISTS inventory_changes(id TEXT PRIMARY KEY, record_key TEXT NOT NULL, revision INTEGER NOT NULL, sequence INTEGER NOT NULL, inventoried INTEGER NOT NULL, updated_at TEXT NOT NULL)");
             s.execute("CREATE INDEX IF NOT EXISTS inventory_changes_record ON inventory_changes(record_key,revision,sequence)");
@@ -86,6 +87,27 @@ public final class TradeRepository {
             s.setString(1,id.toString());
             try (ResultSet rs=s.executeQuery()) { return rs.next() ? TradeDraft.fromJson(new JSONObject(rs.getString(1))) : null; }
         }
+    }
+    public String sharedSource(UUID id) throws SQLException {
+        try (Connection c=connect(); PreparedStatement s=c.prepareStatement("SELECT folder FROM shared_trade_sources WHERE trade_id=?")) {
+            s.setString(1,id.toString());
+            try (ResultSet rs=s.executeQuery()) { return rs.next() ? rs.getString(1) : ""; }
+        }
+    }
+    public void bindSharedSource(UUID id, Path folder) throws SQLException {
+        try (Connection c=connect(); PreparedStatement s=c.prepareStatement("INSERT INTO shared_trade_sources VALUES(?,?) ON CONFLICT(trade_id) DO UPDATE SET folder=excluded.folder")) {
+            s.setString(1,id.toString());s.setString(2,folder.toAbsolutePath().normalize().toString());s.executeUpdate();
+        }
+    }
+    public List<TradeDraft> versions(UUID id) throws SQLException {
+        List<TradeDraft> result=new ArrayList<>();
+        try (Connection c=connect(); PreparedStatement s=c.prepareStatement("SELECT snapshot FROM trade_versions WHERE trade_id=? ORDER BY revision")) {
+            s.setString(1,id.toString());
+            try (ResultSet rs=s.executeQuery()) { while (rs.next()) result.add(TradeDraft.fromJson(new JSONObject(rs.getString(1)))); }
+        }
+        var current=committedDraft(id);
+        if (current!=null) result.add(current);
+        return result;
     }
     public void importLegacy(Path file) throws SQLException, IOException {
         byte[] attachment=Files.readAllBytes(file);

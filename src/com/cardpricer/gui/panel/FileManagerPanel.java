@@ -78,6 +78,7 @@ public class FileManagerPanel extends JPanel {
     private JComboBox<String> historyInventoryFilter;
     private JCheckBox inventoriedCheck;
     private JButton editTradeButton;
+    private JButton revisionHistoryButton;
     private boolean inventorySavePending;
     private JLabel inventorySyncLabel;
     private boolean historyRefreshRunning;
@@ -651,6 +652,10 @@ public class FileManagerPanel extends JPanel {
         editTradeButton.setEnabled(false);
         editTradeButton.addActionListener(e -> editHistoryTrade());
         previewBtns.add(editTradeButton);
+        revisionHistoryButton=new JButton("Revision history");
+        revisionHistoryButton.setEnabled(false);
+        revisionHistoryButton.addActionListener(e -> showRevisionHistory());
+        previewBtns.add(revisionHistoryButton);
         previewBtns.add(histPrintBtn);
         previewBtns.add(histPdfBtn);
         previewBtns.add(histOpenBtn);
@@ -839,6 +844,7 @@ public class FileManagerPanel extends JPanel {
             inventoriedCheck.setEnabled(record!=null && !inventorySavePending);
         }
         if (editTradeButton!=null) editTradeButton.setEnabled(record!=null && !inventorySavePending);
+        if (revisionHistoryButton!=null) revisionHistoryButton.setEnabled(record!=null && record.tradeId!=null);
     }
 
     private void saveInventoryStatus() {
@@ -888,11 +894,7 @@ public class FileManagerPanel extends JPanel {
         editTradeButton.setEnabled(false);
         new SwingWorker<com.cardpricer.model.TradeDraft,Void>() {
             protected com.cardpricer.model.TradeDraft doInBackground() throws Exception {
-                var repo=TradeHistoryService.repository(com.cardpricer.util.AppDataDirectory.tradesPath());
-                var draft=repo.committedDraft(record.tradeId);
-                if (draft==null || draft.revision()!=record.revision)
-                    throw new IllegalStateException("Open this trade on the workstation where it was saved, or refresh History if it changed.");
-                return draft;
+                return TradeHistoryService.openForEditing(record,com.cardpricer.util.AppDataDirectory.tradesPath(),PreferencesPanel.getSharedTradesFolder());
             }
             protected void done() {
                 loadHistoryPreview();
@@ -926,6 +928,31 @@ public class FileManagerPanel extends JPanel {
         }.execute();
     }
 
+    private void showRevisionHistory() {
+        TradeRecord record=selectedRecord();
+        if (record==null || record.tradeId==null) return;
+        revisionHistoryButton.setEnabled(false);
+        new SwingWorker<String,Void>() {
+            protected String doInBackground() throws Exception {
+                String shared=PreferencesPanel.getSharedTradesFolder();
+                var repo=TradeHistoryService.repository(com.cardpricer.util.AppDataDirectory.tradesPath());
+                if (!shared.isBlank()) TradeHistoryService.openForEditing(record,com.cardpricer.util.AppDataDirectory.tradesPath(),shared);
+                return com.cardpricer.service.SharedTradeService.revisionHistory(repo,shared.isBlank() ? null : Path.of(shared),record.tradeId);
+            }
+            protected void done() {
+                loadHistoryPreview();
+                try {
+                    JTextArea text=new JTextArea(get(),24,85);
+                    text.setEditable(false);text.setCaretPosition(0);
+                    text.setLineWrap(true);text.setWrapStyleWord(true);
+                    JOptionPane.showMessageDialog(FileManagerPanel.this,new JScrollPane(text),"Trade revision history",JOptionPane.PLAIN_MESSAGE);
+                } catch (Exception failure) {
+                    JOptionPane.showMessageDialog(FileManagerPanel.this,errorMessage(failure),"Could not load revision history",JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
     private static String errorMessage(Throwable error) {
         while (error.getCause()!=null) error=error.getCause();
         return error.getMessage();
@@ -938,9 +965,9 @@ public class FileManagerPanel extends JPanel {
             return;
         }
         try {
-            String content = Files.readString(Path.of(r.filename), StandardCharsets.UTF_8);
+            String content = TradeHistoryService.receiptContent(r,com.cardpricer.util.AppDataDirectory.tradesPath());
             ReceiptPrintService.printReceipt(this, content);
-        } catch (IOException e) {
+        } catch (Exception e) {
             JOptionPane.showMessageDialog(this, "Could not read file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
         }
     }
@@ -952,10 +979,10 @@ public class FileManagerPanel extends JPanel {
             return;
         }
         try {
-            String content = Files.readString(Path.of(r.filename), StandardCharsets.UTF_8);
+            String content = TradeHistoryService.receiptContent(r,com.cardpricer.util.AppDataDirectory.tradesPath());
             String pdfPath = r.filename.replace(".txt", ".pdf");
             ReceiptPrintService.saveAsPdf(this, content, pdfPath);
-        } catch (IOException e) {
+        } catch (Exception e) {
             JOptionPane.showMessageDialog(this, "Could not read file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
         }
     }

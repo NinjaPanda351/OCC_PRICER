@@ -11,7 +11,11 @@ import java.util.List;
 public final class TradeApplicationService {
     private final TradeRepository repository;
     private final Path outputs;
-    public TradeApplicationService(TradeRepository repository, Path outputs) { this.repository = repository; this.outputs = outputs; }
+    private final Path shared;
+    public TradeApplicationService(TradeRepository repository, Path outputs) { this(repository,outputs,null); }
+    public TradeApplicationService(TradeRepository repository, Path outputs, Path shared) {
+        this.repository = repository; this.outputs = outputs; this.shared=shared;
+    }
     public int finalizeTrade(TradeDraft draft) throws Exception {
         draft.validateForApproval();
         TradeDraft existing=repository.committedDraft(draft.id());
@@ -27,6 +31,9 @@ public final class TradeApplicationService {
 
     public int updateTrade(TradeDraft draft, long expectedRevision) throws Exception {
         draft.validateForApproval();
+        if (shared!=null) return new SharedTradeService(repository,outputs,shared).update(draft,expectedRevision);
+        if (!repository.sharedSource(draft.id()).isBlank())
+            throw new IllegalStateException("Reconnect this trade's Shared Trades Folder before saving corrections.");
         repository.revise(draft, expectedRevision, outputs(draft, true));
         return repository.retryOutputs(outputs);
     }
@@ -55,7 +62,7 @@ public final class TradeApplicationService {
         return safe.replaceAll("[. ]+$", "");
     }
 
-    private static List<TradeRepository.Output> outputs(TradeDraft draft, boolean correction) throws Exception {
+    static List<TradeRepository.Output> outputs(TradeDraft draft, boolean correction) throws Exception {
             var settlement = draft.settle();
             List<TradeRepository.Output> jobs = new ArrayList<>();
             String prefix = outputPrefix(draft, correction);

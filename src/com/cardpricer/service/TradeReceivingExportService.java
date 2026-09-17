@@ -82,6 +82,7 @@ public class TradeReceivingExportService {
                         sync.enqueue(file,Path.of(shared).resolve(file.getFileName()));
                 }
                 int pending=sync.retry(FORCE_RETRY.getAndSet(false));
+                pending+=SharedTradeService.retrySharedOutputs(Path.of(shared));
                 sharedSyncStatus=pending==0 ? "synced" : pending+" output(s) pending sync or in conflict";
             } catch (Exception e) { sharedSyncStatus="pending sync: "+e.getMessage(); }
             finally { SYNC_RUNNING.set(false); }
