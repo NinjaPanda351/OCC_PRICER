@@ -30,7 +30,9 @@ public class CardEntry {
     public CardEntry(final Card theCard, final boolean isFoil) {
         // Build set collector code WITHOUT "Foil" suffix in name
         // Just add "f" to code for foils: "MKM 1" or "MKM 1f"
-        this.mySetCollectorCode = theCard.getSetCode() + " " +
+        // PLST cards save in CSV as the base code only (e.g. "MMQ 81" not "PLST MMQ 81")
+        String setCode = theCard.getSetCode();
+        this.mySetCollectorCode = (setCode.equalsIgnoreCase("plst") ? "" : setCode + " ") +
                 theCard.getCollectorNumber() +
                 (isFoil ? "f" : "");
 
