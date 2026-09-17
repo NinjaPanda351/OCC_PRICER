@@ -55,6 +55,8 @@ All workstations must use this updated version and a shared network folder that 
 
 Receipts use labeled sections, numbered card details, per-card payouts and a separate totals section. Older text-only receipts open a text editor with an automatic backup of the original; those edits do not recalculate a POS export. Full editing on another workstation requires the structured trade JSON or a shared revision document.
 
+Trade receiving CSVs replace commas in card names with `ɕ` for POS compatibility, so those names do not need comma-related quotation marks. Saved trades and receipts retain the original names.
+
 Windows stores data under `%APPDATA%\OCC_Trade_Pricer`; other systems use `~/.occ_trade_pricer`. For isolated verification, `-Dcardpricer.dataDir=/temporary/path` overrides this location.
 
 | Location | Purpose |

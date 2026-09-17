@@ -1,3 +1,5 @@
+v5.0.1
+
 v5.0.0
 - Added Copy file path to Local Files, Shared Files, and History; multiple selected file paths copy on separate lines.
 - Trade removal supports multiple highlighted rows, including sorted lists; checkboxes remain supported.
