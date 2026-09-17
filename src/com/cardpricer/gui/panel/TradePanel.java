@@ -1749,7 +1749,8 @@ public class TradePanel extends JPanel {
 
     private void showEditingState() {
         editingLabel.setText("Editing saved trade for " + customerNameField.getText()
-                + " | Original retained | Review POS inventory after saving");
+                + " | Revision " + editingRevision + " | Review POS inventory after saving");
+        editingLabel.setToolTipText("Earlier revisions are retained. Shared saves check for changes from other workstations before accepting your correction.");
         editingLabel.setVisible(true);
         cancelEditButton.setVisible(true);
         saveExportBtn.setText("Save changes");

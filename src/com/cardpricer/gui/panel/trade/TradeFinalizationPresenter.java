@@ -20,14 +20,18 @@ public final class TradeFinalizationPresenter {
         progress.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);progress.pack();progress.setLocationRelativeTo(owner);
         SwingWorker<Integer,Void> worker=new SwingWorker<>() {
             protected Integer doInBackground() throws Exception {
-                var service=new TradeApplicationService(new TradeRepository(ledger),output);
+                String shared=com.cardpricer.gui.panel.PreferencesPanel.getSharedTradesFolder();
+                var service=new TradeApplicationService(new TradeRepository(ledger),output,shared.isBlank() ? null : Path.of(shared));
                 return editingRevision==null ? service.finalizeTrade(draft) : service.updateTrade(draft,editingRevision);
             }
             protected void done() {
                 progress.dispose();
                 try {saved.accept(get());}
-                catch(Exception e) {JOptionPane.showMessageDialog(owner,"Could not finish saving: "+e.getMessage()
-                        +"\nThe draft is retained. Retry uses the same trade ID.","Save failed",JOptionPane.ERROR_MESSAGE);}
+                catch(Exception e) {
+                    Throwable cause=e;while(cause.getCause()!=null)cause=cause.getCause();
+                    JOptionPane.showMessageDialog(owner,"Could not finish saving: "+cause.getMessage()
+                        +"\nThe draft is retained. If the connection failed during a shared save, refresh History to check whether the revision was saved.","Save failed",JOptionPane.ERROR_MESSAGE);
+                }
             }
         };
         TaskCoordinator.execute(worker);progress.setVisible(true);
