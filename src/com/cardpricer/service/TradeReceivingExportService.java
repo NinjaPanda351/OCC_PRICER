@@ -311,7 +311,8 @@ public class TradeReceivingExportService {
                     continue;
                 }
 
-                String code = card.getSetCode() + " " + card.getCollectorNumber();
+                String code = (card.getSetCode().equalsIgnoreCase("plst") ? "" : card.getSetCode() + " ")
+                        + card.getCollectorNumber();
                 if (item.isFoil()) {
                     code += item.getFinishType();
                 }

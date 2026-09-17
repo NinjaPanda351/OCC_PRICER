@@ -29,7 +29,8 @@ public final class TradePosEncoder {
             var allocation = settlement.lines().get(i);
             if (!allocation.line().stock()) continue;
             var item = items.get(i);
-            String mapped=SetList.fromScryfallCode(item.getCard().getSetCode())+" "+item.getCard().getCollectorNumber()+item.getFinishType();
+            String setName=SetList.fromScryfallCode(item.getCard().getSetCode());
+            String mapped=("PLST".equals(setName) ? "" : setName+" ")+item.getCard().getCollectorNumber()+item.getFinishType();
             var previous=identities.putIfAbsent(mapped,item.getCard().identity());
             if (previous!=null && !previous.equals(item.getCard().identity()))
                 throw new IllegalArgumentException("POS mapping merges different printings: "+mapped);
@@ -45,7 +46,8 @@ public final class TradePosEncoder {
     private static void writeRow(Writer writer, int line, TradeItem item, int qty,
                                  BigDecimal cost, BigDecimal price) throws IOException {
         var card = item.getCard();
-        String code = SetList.fromScryfallCode(card.getSetCode()) + " " + card.getCollectorNumber() + item.getFinishType();
+        String setName = SetList.fromScryfallCode(card.getSetCode());
+        String code = ("PLST".equals(setName) ? "" : setName + " ") + card.getCollectorNumber() + item.getFinishType();
         // The receiving POS requires U+0255 instead of embedded commas, even in quoted fields.
         String description = card.getName().replace(',', '\u0255')
                 + (item.isFoil() ? " (" + item.getFinish() + ")" : "");

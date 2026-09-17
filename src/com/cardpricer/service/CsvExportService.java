@@ -48,7 +48,8 @@ public class CsvExportService {
         for (Card card : cards) {
             if (card.hasNormalPrice()) entries.add(new CardEntry(card, false));
             if (card.hasFoilPrice()) entries.add(new CardEntry(card, true));
-            if (card.hasEtchedPrice()) entries.add(new CardEntry(card.getSetCode()+" "+card.getCollectorNumber()+"e",
+            if (card.hasEtchedPrice()) entries.add(new CardEntry(
+                    (card.getSetCode().equalsIgnoreCase("plst") ? "" : card.getSetCode()+" ")+card.getCollectorNumber()+"e",
                     card.getName(),card.getEtchedPriceAsBigDecimal(),card.getRarity(),card.getArtist()));
         }
         return entries;
@@ -67,7 +68,8 @@ public class CsvExportService {
         int totalQuantity = 0;
         for (OrderItem item : items) {
             Card card = item.getCard();
-            String code = card.getSetCode() + " " + card.getCollectorNumber() + (item.isFoil() ? "f" : "");
+            String code = (card.getSetCode().equalsIgnoreCase("plst") ? "" : card.getSetCode() + " ")
+                    + card.getCollectorNumber() + (item.isFoil() ? "f" : "");
             CsvRows.write(writer, code, card.getName(), item.getFinish(), item.getQuantity(),
                     CsvRows.money(item.getUnitPrice()), CsvRows.money(item.getTotalPrice()));
             grandTotal = grandTotal.add(item.getTotalPrice());
