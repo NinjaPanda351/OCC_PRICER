@@ -94,7 +94,7 @@ class CsvExportTest {
             var rows = parse(Files.readString(Path.of(filename)));
             assertEquals(2, rows.size());
             assertEquals(19, rows.getFirst().size());
-            assertEquals(List.of("1", "5", "5.2", "", "TST 12", "", "", card.getName(), "", "3", "", "", "",
+            assertEquals(List.of("1", "5", "5.2", "", "TST 12", "", "", "Éowynɕ \"Shieldmaiden\"\r\nSecond line", "", "3", "", "", "",
                     "50.13", "", "", "150.39", "TAX", "100.25"), rows.get(1).toList());
             assertEquals("COST", rows.getFirst().get(13));
             assertEquals("EXTENDED COST", rows.getFirst().get(16));
@@ -125,6 +125,28 @@ class CsvExportTest {
         var rows = parse(Files.readString(Path.of(path)));
         assertEquals(1, rows.size());
         assertEquals(List.of("TST 12", card.getName(), card.getArtist(), "", "4"), rows.getFirst().toList());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void tradeNamesUsePosCommaSubstituteWithoutRequiringQuotedFields(boolean foil) throws Exception {
+        String originalName="Koma, World-Eater, Test";
+        Card card=card(originalName,"Artist");
+        var service=new TradeReceivingExportService(directory,ignored -> {});
+        var item=new TradeItem(card,foil);
+        String filename=service.exportToPOSFormat(List.of(item),"Trader","Customer",
+                List.of(new BigDecimal("12.34")),List.of(2),"credit");
+        String csv=Files.readString(Path.of(filename));
+        // The POS splits on commas rather than honoring a quoted name.
+        String[] fields=csv.split("\\r\\n")[1].split(",",-1);
+        assertEquals(19,fields.length);
+        assertEquals("Komaɕ World-Eaterɕ Test"+(foil ? " ("+item.getFinish()+")" : ""),fields[7]);
+        assertFalse(csv.contains("\""));
+        assertFalse(csv.contains("&#"));
+        assertEquals("2",fields[9]);assertEquals("",fields[12]);
+        assertEquals("6.17",fields[13]);assertEquals("12.34",fields[16]);
+        assertEquals("TAX",fields[17]);assertEquals("12.34",fields[18]);
+        assertEquals(originalName,card.getName());
     }
 
     @Test

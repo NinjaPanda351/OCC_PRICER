@@ -11,12 +11,18 @@ import java.util.List;
 /** The provisional 19-column receiving schema. Consumes approved costs without repricing. */
 public final class TradePosEncoder {
     private TradePosEncoder() {}
+    private enum Column {
+        LINE_NO, DEPARTMENT, CATEGORY, TYPE, CODE, ITEM_TYPE, ORDER_NO, DESCRIPTION, UOM,
+        QTY_ON_ORD, RESTOCK_LEVEL, REORDER_POINT, QTY_ON_HAND, COST, DISCOUNT, BID,
+        EXTENDED_COST, TAX_CODE, PRICE;
+
+        String header() { return name().replace('_', ' '); }
+    }
     public static void write(Writer writer, List<TradeItem> items, List<BigDecimal> unitPrices,
                              SettlementEngine.Settlement settlement) throws IOException {
         if (items.size() != settlement.lines().size() || items.size() != unitPrices.size())
             throw new IllegalArgumentException("Settlement and item counts differ");
-        CsvRows.writeRow(writer, "LINE NO,DEPARTMENT,CATEGORY,TYPE,CODE,ITEM TYPE,ORDER NO,DESCRIPTION,UOM,"
-                + "QTY ON ORD,RESTOCK LEVEL,REORDER POINT,QTY ON HAND,COST,DISCOUNT,BID,EXTENDED COST,TAX CODE,PRICE");
+        CsvRows.write(writer, (Object[]) java.util.Arrays.stream(Column.values()).map(Column::header).toArray(String[]::new));
         int line = 1;
         java.util.Map<String,com.cardpricer.model.PrintingIdentity> identities=new java.util.HashMap<>();
         for (int i = 0; i < items.size(); i++) {
@@ -40,9 +46,23 @@ public final class TradePosEncoder {
                                  BigDecimal cost, BigDecimal price) throws IOException {
         var card = item.getCard();
         String code = SetList.fromScryfallCode(card.getSetCode()) + " " + card.getCollectorNumber() + item.getFinishType();
-        String description = card.getName() + (item.isFoil() ? " (" + item.getFinish() + ")" : "");
-        CsvRows.write(writer, line, "5", "5.2", "", code, "", "", description, "", qty, "", "", "",
-                cost.toPlainString(), "", "", cost.multiply(BigDecimal.valueOf(qty)).toPlainString(),
-                "TAX", price.setScale(2, RoundingMode.UNNECESSARY).toPlainString());
+        // The receiving POS requires U+0255 instead of embedded commas, even in quoted fields.
+        String description = card.getName().replace(',', '\u0255')
+                + (item.isFoil() ? " (" + item.getFinish() + ")" : "");
+        // Every column exists, including unused fields such as QTY ON HAND.
+        // Assign values by column name so adding a value cannot shift the cost/tax/price fields.
+        Object[] row = new Object[Column.values().length];
+        java.util.Arrays.fill(row, "");
+        row[Column.LINE_NO.ordinal()] = line;
+        row[Column.DEPARTMENT.ordinal()] = "5";
+        row[Column.CATEGORY.ordinal()] = "5.2";
+        row[Column.CODE.ordinal()] = code;
+        row[Column.DESCRIPTION.ordinal()] = description;
+        row[Column.QTY_ON_ORD.ordinal()] = qty;
+        row[Column.COST.ordinal()] = cost.toPlainString();
+        row[Column.EXTENDED_COST.ordinal()] = cost.multiply(BigDecimal.valueOf(qty)).toPlainString();
+        row[Column.TAX_CODE.ordinal()] = "TAX";
+        row[Column.PRICE.ordinal()] = price.setScale(2, RoundingMode.UNNECESSARY).toPlainString();
+        CsvRows.write(writer, row);
     }
 }
