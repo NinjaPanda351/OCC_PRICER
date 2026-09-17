@@ -22,7 +22,7 @@ jobs:
         run: ./build.ps1 -Version $env:GITHUB_REF_NAME.Substring(1)
       - if: runner.os == 'macOS'
         run: bash ./build.sh "${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ runner.os }}
           path: dist/*
@@ -33,7 +33,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: release-*
           path: release
