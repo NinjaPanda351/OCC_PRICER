@@ -55,6 +55,9 @@ class TradeHistoryWorkflowTest {
         assertEquals(correction.revision(),latest.revision);
         assertFalse(latest.inventoried);
         assertTrue(latest.filename.endsWith("_rev2.txt"));
+        assertTrue(TradeHistoryService.csvPath(latest).getFileName().toString().endsWith("_rev2.csv"));
+        assertTrue(Files.isRegularFile(TradeHistoryService.csvPath(latest)));
+        assertNotEquals(TradeHistoryService.csvPath(record),TradeHistoryService.csvPath(latest));
         assertTrue(Files.readString(Path.of(latest.filename)).contains("Corrected customer"));
         try (var c=DriverManager.getConnection("jdbc:sqlite:"+temp.resolve("ledger/trades.sqlite"));
              var s=c.createStatement();var rs=s.executeQuery("SELECT snapshot FROM trade_versions")) {

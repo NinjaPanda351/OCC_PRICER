@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
@@ -125,6 +126,72 @@ class CsvExportTest {
         var rows = parse(Files.readString(Path.of(path)));
         assertEquals(1, rows.size());
         assertEquals(List.of("TST 12", card.getName(), card.getArtist(), "", "4"), rows.getFirst().toList());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "PWAR, 220s, F, WAR 220F",
+            "pwar, 220s★, F, WAR 220F",
+            "PEOE, 210p, '', EOE 210F",
+            "PEOE, 210s, F, EOE 210F",
+            "PDMU, 1, F, DMU 1F",
+            "PCHK, 1★, F, COK 1F",
+            "WAR, 220, '', WAR 220",
+            "PLST, ARB-73★, E, ARB 73★E",
+            "PCY, 12, F, PCY 12F",
+            "PIP, 12, S, PIP 12S",
+            "PRM, 12, F, PRM 12F",
+            "PEOE, 210a, F, PEOE 210aF"
+    })
+    void tradeExportsMapSetPromosToBaseFoilsWithoutChangingTheTrade(String set,String number,String finish,String code) throws Exception {
+        Card card=card("Example card","Artist");card.setSetCode(set);card.setCollectorNumber(number);
+        var item=new TradeItem(card,!finish.isEmpty(),2,finish);
+        var identity=item.getCard().identity();var originalPrice=item.getUnitPrice();
+        var service=new TradeReceivingExportService(directory,ignored -> {});
+        String received=service.exportToPOSFormat(List.of(item),"Trader","Customer",
+                List.of(new BigDecimal("12.34")),List.of(2),"credit");
+        var row=parse(Files.readString(Path.of(received))).get(1);
+        assertEquals(code,row.get(4));assertEquals("2",row.get(9));
+        assertEquals("6.17",row.get(13));assertEquals("12.34",row.get(16));assertEquals("12.34",row.get(18));
+        if (code.endsWith("F")) assertEquals("Example card (Foil)",row.get(7));
+        String inventory=service.exportToInventoryFormat(List.of(item),List.of("NM"),List.of(2));
+        assertEquals(List.of(code,"Example card","Artist","","2"),
+                parse(Files.readString(Path.of(inventory))).getFirst().toList());
+        assertEquals(identity,item.getCard().identity());assertEquals(finish,item.getFinishType());
+        assertEquals(originalPrice,item.getUnitPrice());
+    }
+
+    @Test void promoAndBaseFoilsCanShareStockWithoutLosingQuantitiesOrCosts() throws Exception {
+        Card promo=card("Example card","Artist");promo.setSetCode("PEOE");promo.setCollectorNumber("210p");promo.setProviderId("promo");
+        Card prerelease=promo.copy();prerelease.setCollectorNumber("210s");prerelease.setProviderId("prerelease");
+        Card base=promo.copy();base.setSetCode("EOE");base.setCollectorNumber("210");base.setProviderId("base");
+        var items=List.of(new TradeItem(promo,false),new TradeItem(base,true),new TradeItem(prerelease,true));
+        var service=new TradeReceivingExportService(directory,ignored -> {});
+        String received=service.exportToPOSFormat(items,"Trader","Customer",
+                List.of(new BigDecimal("1.50"),new BigDecimal("2.00"),new BigDecimal("2.50")),List.of(2,3,4),"credit");
+        var rows=parse(Files.readString(Path.of(received)));
+        assertEquals(4,rows.size());
+        assertTrue(rows.subList(1,4).stream().allMatch(row -> row.get(4).equals("EOE 210F")));
+        assertEquals(List.of("1.50","3.00","5.00"),rows.subList(1,4).stream().map(row -> row.get(16)).toList());
+        String inventory=service.exportToInventoryFormat(items,List.of("NM","NM","LP"),List.of(2,3,4));
+        var inventoryRows=parse(Files.readString(Path.of(inventory)));
+        assertEquals(1,inventoryRows.size());assertEquals("EOE 210F",inventoryRows.getFirst().get(0));
+        assertEquals("9",inventoryRows.getFirst().get(4));
+    }
+
+    @Test void promoAliasDoesNotHideUnrelatedPrintingCollisions() {
+        Card promo=card("Example card","Artist");promo.setSetCode("PEOE");promo.setCollectorNumber("210p");
+        Card base=promo.copy();base.setSetCode("EOE");base.setCollectorNumber("210");base.setProviderId("base");
+        Card other=base.copy();other.setProviderId("different-printing");
+        var service=new TradeReceivingExportService(directory,ignored -> fail("Must not publish a conflicting export"));
+        var items=List.of(new TradeItem(promo,true),new TradeItem(base,true),new TradeItem(other,true));
+        assertThrows(IllegalArgumentException.class,()->service.exportToPOSFormat(items,"Trader","Customer",
+                List.of(BigDecimal.TEN,BigDecimal.TEN,BigDecimal.TEN),List.of(1,1,1),"credit"));
+        assertThrows(IllegalArgumentException.class,()->service.exportToInventoryFormat(items,List.of("NM","NM","NM"),List.of(1,1,1)));
+        other.setName("Different card");
+        var differentNames=List.of(new TradeItem(promo,true),new TradeItem(other,true));
+        assertThrows(IllegalArgumentException.class,()->service.exportToPOSFormat(differentNames,"Trader","Customer",
+                List.of(BigDecimal.TEN,BigDecimal.TEN),List.of(1,1),"credit"));
     }
 
     @ParameterizedTest

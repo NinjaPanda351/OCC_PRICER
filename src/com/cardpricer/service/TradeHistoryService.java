@@ -151,6 +151,15 @@ public class TradeHistoryService {
         return new TradeRepository(java.nio.file.Path.of(localDirectory).resolveSibling("ledger").resolve("trades.sqlite"));
     }
 
+    /** Companion import path for this exact receipt revision, in its local or shared folder. */
+    public static java.nio.file.Path csvPath(TradeRecord record) {
+        var receipt = java.nio.file.Path.of(record.filename);
+        String name = receipt.getFileName().toString();
+        if (!name.toLowerCase(Locale.ROOT).endsWith(".txt"))
+            throw new IllegalArgumentException("Expected a trade receipt filename");
+        return receipt.resolveSibling(name.substring(0, name.length() - 4) + ".csv");
+    }
+
     public static com.cardpricer.model.TradeDraft openForEditing(TradeRecord record, String localDirectory, String sharedPath) throws Exception {
         if (record.tradeId==null) throw new IllegalArgumentException("Use the receipt editor for this older trade");
         var repo=repository(localDirectory);

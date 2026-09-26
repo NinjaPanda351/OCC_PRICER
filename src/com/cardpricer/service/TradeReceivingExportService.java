@@ -299,30 +299,30 @@ public class TradeReceivingExportService {
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + "_" + java.util.UUID.randomUUID();
         String filename = String.format("%s/inventory_from_trade_%s.csv", dataDirectory, timestamp);
 
+        // Change Qty sets the quantity for a code, so promo/base aliases need one combined row.
+        var itemsByCode = new java.util.LinkedHashMap<String, java.util.List<TradeItem>>();
+        var quantityByCode = new java.util.HashMap<String, Integer>();
+        for (int i = 0; i < items.size(); i++) {
+            TradeItem item = items.get(i);
+            if ("MISC".equalsIgnoreCase(item.getCard().getSetCode())) continue;
+            String code = TradeInventoryCode.map(item).code();
+            var matching = itemsByCode.computeIfAbsent(code, ignored -> new java.util.ArrayList<>());
+            for (var existing : matching) {
+                if (!TradeInventoryCode.canShareCode(existing, item))
+                    throw new IllegalArgumentException("POS mapping merges different printings: " + code);
+            }
+            matching.add(item);
+            quantityByCode.merge(code, i < quantities.size() ? quantities.get(i) : 1, Math::addExact);
+        }
+
         try (Writer writer = Files.newBufferedWriter(Path.of(filename), StandardCharsets.UTF_8)) {
             // No header for Item Wizard Change Qty format
-
-            for (int i = 0; i < items.size(); i++) {
-                TradeItem item = items.get(i);
-                Card card = item.getCard();
-
-                // Skip MISC cards
-                if ("MISC".equals(card.getSetCode())) {
-                    continue;
-                }
-
-                String cn = card.getCollectorNumber();
-                String code = card.getSetCode().equalsIgnoreCase("plst") ? cn.replace('-', ' ')
-                        : card.getSetCode() + " " + cn;
-                if (item.isFoil()) {
-                    code += item.getFinishType();
-                }
-
+            for (var entry : itemsByCode.entrySet()) {
+                String code = entry.getKey();
+                Card card = entry.getValue().getFirst().getCard();
                 String cardName = card.getName();
                 String artist = card.getArtist() != null ? card.getArtist() : "";
-                int quantity = i < quantities.size() ? quantities.get(i) : 1;
-
-                CsvRows.write(writer, code, cardName, artist, "", quantity);
+                CsvRows.write(writer, code, cardName, artist, "", quantityByCode.get(code));
             }
         }
 

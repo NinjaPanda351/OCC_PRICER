@@ -39,6 +39,7 @@ public class CardImagePopup {
      */
     public CardImagePopup(Window owner) {
         popup = new JWindow(owner);
+        popup.setFocusableWindowState(false);
         popup.setAlwaysOnTop(true);
 
         imageLabel = new JLabel();
@@ -117,6 +118,12 @@ public class CardImagePopup {
         currentUrl = null;
         popup.setVisible(false);
         cancelLoader();
+    }
+
+    /** Releases the floating window and prevents pending image loads from reopening it. */
+    public void dispose() {
+        hide();
+        popup.dispose();
     }
 
     private void displayIcon(ImageIcon icon, Point screenPos) {
