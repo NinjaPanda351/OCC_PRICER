@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -42,53 +43,98 @@ public class TradeHistoryService {
     }
 
     static List<TradeRecord> loadAll(String localDirectory, String sharedPath) {
-        // Trade IDs combine revisions; legacy receipts use the filename as their identity.
-        Map<String, TradeRecord> byFilename = new LinkedHashMap<>();
-
-        loadFromDirectory(localDirectory, byFilename);
-        try {
-            var local=java.nio.file.Path.of(localDirectory);
-            var repository=new TradeRepository(local.resolveSibling("ledger").resolve("trades.sqlite"));
-            for (TradeRecord record:byFilename.values()) if (record.tradeId==null)
-                repository.importLegacy(java.nio.file.Path.of(record.filename));
-            for (TradeRecord record:repository.history(local)) byFilename.put(record.historyKey(),record);
-        } catch (Exception failure) { System.err.println("Structured trade history unavailable: "+failure.getMessage()); }
-
-        if (sharedPath != null && !sharedPath.isBlank()) {
-            loadFromDirectory(sharedPath, byFilename);
-            try {
-                for (TradeRecord record:SharedTradeService.history(java.nio.file.Path.of(sharedPath)))
-                    byFilename.merge(record.historyKey(),record,(old,next) -> next.revision>=old.revision ? next : old);
-            } catch (IOException failure) { throw new IllegalStateException("Could not load shared trade revisions",failure); }
-        }
-
-        List<TradeRecord> result = new ArrayList<>(byFilename.values());
-        try { result = new ArrayList<>(repository(localDirectory).inventoryStatuses(result)); }
-        catch (Exception failure) { throw new IllegalStateException("Could not load POS inventory status",failure); }
-        result.sort((a, b) -> b.date.compareTo(a.date));
-        return result;
+        try { return new Session(localDirectory,sharedPath).refresh().records(); }
+        catch(Exception failure) { throw new IllegalStateException("Could not load trade history",failure); }
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
+    /** Small immutable list data; receipt bodies stay in SQLite until selected. */
+    public record Snapshot(List<TradeRecord> records,Map<String,String> sources,Map<String,String> tokens,String notice) {
+        public Snapshot { records=List.copyOf(records);sources=Map.copyOf(sources);tokens=Map.copyOf(tokens); }
+        public String token(TradeRecord record) { return tokens.get(record.historyKey()); }
+    }
 
-    private static void loadFromDirectory(String dirPath, Map<String, TradeRecord> out) {
-        File dir = new File(dirPath);
-        if (!dir.exists() || !dir.isDirectory()) return;
+    /** Reuse one repository per History panel. All methods that access storage run off the EDT. */
+    public static final class Session {
+        private final Path local,shared;
+        private final TradeRepository repository;
+        private final HistoryIndex index;
+        private int lastReadCount;
 
-        File[] files = dir.listFiles(f -> f.isFile() && f.getName().endsWith(".txt"));
-        if (files == null) return;
+        public Session(String localDirectory,String sharedDirectory) throws Exception {
+            local=Path.of(localDirectory).toAbsolutePath().normalize();
+            shared=sharedDirectory==null || sharedDirectory.isBlank() ? null : Path.of(sharedDirectory).toAbsolutePath().normalize();
+            repository=repository(localDirectory);index=new HistoryIndex(repository);
+        }
 
-        for (File f : files) {
-            TradeRecord record = parseRecord(f);
-            if (record != null) {
-                out.merge(record.historyKey(), record, (old, next) -> next.revision > old.revision ? next : old);
+        public Snapshot cached() throws Exception { return snapshot(""); }
+
+        public Snapshot refresh() throws Exception {
+            lastReadCount=0;
+            lastReadCount+=index.scan(local,"receipt",repository.receiptNames(),false,file -> {
+                var loaded=readReceipt(file);
+                if(loaded.record().tradeId==null) repository.importLegacy(file);
+                return loaded;
+            }).reads();
+            String notice="";
+            if(shared!=null) {
+                try {
+                    if(!Files.isDirectory(shared)) throw new IOException("Shared folder unavailable");
+                    if(!shared.equals(local)) lastReadCount+=index.scan(shared,"receipt",Set.of(),true,TradeHistoryService::readReceipt).reads();
+                    lastReadCount+=index.scan(shared.resolve(SharedTradeService.DIRECTORY),"revision",Set.of(),false,SharedTradeService::historyFile).reads();
+                } catch(IOException failure) {
+                    notice="Shared history unavailable; showing saved history. Refresh to retry.";
+                }
             }
+            return snapshot(notice);
+        }
+
+        int lastReadCount() { return lastReadCount; }
+
+        private Snapshot snapshot(String notice) throws Exception {
+            Map<String,HistoryIndex.Entry> selected=new LinkedHashMap<>();
+            merge(selected,index.entries(HistoryIndex.scope(local),"receipt"),false);
+            for(var r:repository.history(local))
+                selected.put(r.historyKey(),new HistoryIndex.Entry(r.historyKey(),Long.toString(r.revision),r));
+            if(shared!=null) {
+                if(!shared.equals(local)) merge(selected,index.entries(HistoryIndex.scope(shared),"receipt"),false);
+                merge(selected,index.entries(HistoryIndex.scope(shared.resolve(SharedTradeService.DIRECTORY)),"revision"),true);
+            }
+            var sources=new HashMap<String,String>();var tokens=new HashMap<String,String>();
+            var records=new ArrayList<TradeRecord>();
+            for(var e:selected.values()) {
+                var r=e.record();records.add(r);sources.put(r.historyKey(),e.source());
+                tokens.put(r.historyKey(),e.source()+"\n"+e.stamp()+"\n"+HistoryIndex.metadata(r));
+            }
+            records=new ArrayList<>(repository.inventoryStatuses(records));
+            records.sort(Comparator.comparing((TradeRecord r)->r.date).reversed().thenComparing(TradeRecord::historyKey));
+            return new Snapshot(records,sources,tokens,notice);
+        }
+
+        private static void merge(Map<String,HistoryIndex.Entry> selected,List<HistoryIndex.Entry> entries,boolean preferEqual) {
+            for(var e:entries) selected.merge(e.record().historyKey(),e,(old,next) ->
+                    next.record().revision>old.record().revision || (preferEqual && next.record().revision==old.record().revision) ? next : old);
+        }
+
+        public Set<String> search(Snapshot snapshot,String query) throws Exception {
+            var sources=index.search(query);var keys=new HashSet<String>();
+            snapshot.sources().forEach((key,source)-> { if(sources.contains(source)) keys.add(key); });
+            return keys;
+        }
+
+        public String receipt(Snapshot snapshot,TradeRecord record) throws Exception {
+            String source=snapshot.sources().get(record.historyKey());
+            String body=source==null ? null : index.body(source,snapshot.token(record));
+            if(body==null) throw new IOException("Receipt changed. Refresh History and select it again.");
+            return body;
         }
     }
 
-    private static TradeRecord parseRecord(File file) {
+    static HistoryIndex.Loaded readReceipt(Path path) throws IOException {
+        String content=Files.readString(path,StandardCharsets.UTF_8);
+        return new HistoryIndex.Loaded(parseRecord(path.toFile(),content),content);
+    }
+
+    private static TradeRecord parseRecord(File file,String content) {
         LocalDateTime date = parseDateFromFilename(file);
         String customerName  = "Unknown";
         String traderName    = "Unknown";
@@ -98,8 +144,8 @@ public class TradeHistoryService {
         UUID tradeId = null;
         long revision = 0;
 
-        try {
-            List<String> lines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+        {
+            List<String> lines = content.lines().toList();
             for (String line : lines) {
                 Matcher m;
                 if (line.startsWith("Trade ID: ")) {
@@ -122,8 +168,6 @@ public class TradeHistoryService {
                     paymentMethod = m.group(1).trim();
                 }
             }
-        } catch (IOException e) {
-            // Fall back to filename-only record
         }
 
         // Early structured receipts omitted the revision in their text; companion JSON retained it.

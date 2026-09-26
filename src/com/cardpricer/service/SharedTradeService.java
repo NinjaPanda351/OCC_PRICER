@@ -263,6 +263,23 @@ public final class SharedTradeService {
         }
         return records;
     }
+    /** Index one changed document; editing continues to validate the authoritative document. */
+    static HistoryIndex.Loaded historyFile(Path file) throws IOException {
+        String name=file.getFileName().toString();
+        JSONObject document;
+        try { document=readDocument(file,UUID.fromString(name.substring(0,name.length()-5))); }
+        catch (IllegalArgumentException invalid) { throw new IOException("Invalid shared trade filename: "+name,invalid); }
+        JSONObject latest=last(document);
+        TradeDraft draft=snapshot(latest);
+        var receipt=jobs(latest).stream().filter(job->job.name().endsWith(".txt")).findFirst().orElseThrow();
+        LocalDateTime date;
+        try { date=LocalDateTime.ofInstant(Instant.parse(snapshot(document.getJSONArray("versions").getJSONObject(0)).quotedAt()),ZoneId.systemDefault()); }
+        catch(java.time.format.DateTimeParseException unknown) { date=LocalDateTime.of(1970,1,1,0,0); }
+        var record=new TradeRecord(file.toAbsolutePath().getParent().getParent().resolve(receipt.name()).toString(),
+                date,draft.customer(),draft.trader(),draft.payment(),draft.settle().market(),
+                draft.lines().stream().mapToInt(line->line.quantity()).sum(),draft.id(),draft.revision(),false);
+        return new HistoryIndex.Loaded(record,receipt.content());
+    }
     public static String receipt(Path shared, UUID id, long revision) throws IOException {
         Path file=documentPath(shared,id);
         if (!Files.exists(file)) return null;
