@@ -27,7 +27,8 @@ public final class TradeRepository {
         try (Connection connection = connect(); Statement s = connection.createStatement()) {
             int version;
             try (ResultSet rs = s.executeQuery("PRAGMA user_version")) { version = rs.getInt(1); }
-            if (version > 3) throw new SQLException("Ledger was created by a newer application");
+            if (version > 4) throw new SQLException("Ledger was created by a newer application");
+            if (version == 4) return;
             s.execute("PRAGMA journal_mode=WAL");
             s.execute("CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY, revision INTEGER NOT NULL, snapshot TEXT NOT NULL)");
             s.execute("CREATE TABLE IF NOT EXISTS trades(id TEXT PRIMARY KEY, approved_at TEXT NOT NULL, snapshot TEXT NOT NULL)");
@@ -56,9 +57,20 @@ public final class TradeRepository {
                     connection.commit();
                 } catch (Exception failure) { connection.rollback();throw failure; }
             }
+            if (version < 4) {
+                connection.setAutoCommit(false);
+                try {
+                    HistoryIndex.create(connection);
+                    try (var rows=s.executeQuery("SELECT snapshot FROM trades")) {
+                        while(rows.next()) indexHistory(connection,TradeDraft.fromJson(new JSONObject(rows.getString(1))));
+                    }
+                    s.execute("PRAGMA user_version=4");
+                    connection.commit();
+                } catch (Exception failure) { connection.rollback();throw failure; }
+            }
         }
     }
-    private Connection connect() throws SQLException {
+    Connection connect() throws SQLException {
         Connection connection = DriverManager.getConnection("jdbc:sqlite:" + database);
         try (Statement s = connection.createStatement()) {
             s.execute("PRAGMA busy_timeout=5000"); s.execute("PRAGMA foreign_keys=ON"); s.execute("PRAGMA synchronous=FULL");
@@ -118,16 +130,41 @@ public final class TradeRepository {
     }
     public List<com.cardpricer.model.TradeRecord> history(Path outputDirectory) throws SQLException {
         var records=new ArrayList<com.cardpricer.model.TradeRecord>();
-        try (Connection c=connect(); Statement s=c.createStatement(); ResultSet rs=s.executeQuery("SELECT id,approved_at,snapshot, (SELECT name FROM jobs WHERE trade_id=trades.id AND name LIKE '%.txt' ORDER BY id DESC LIMIT 1) AS receipt FROM trades ORDER BY approved_at DESC")) {
-            while(rs.next()) {
-                TradeDraft draft=TradeDraft.fromJson(new JSONObject(rs.getString("snapshot")));
-                String receipt=rs.getString("receipt");
-                records.add(new com.cardpricer.model.TradeRecord(outputDirectory.resolve(receipt == null ? "trade_"+draft.id()+".txt" : receipt).toString(),
-                        java.time.LocalDateTime.ofInstant(Instant.parse(rs.getString("approved_at")),java.time.ZoneId.systemDefault()),
-                        draft.customer(),draft.trader(),draft.payment(),draft.settle().market(),draft.lines().stream().mapToInt(line->line.quantity()).sum(),draft.id(),draft.revision(),false));
+        for(var entry:new HistoryIndex(this).entries("","managed")) {
+            var r=entry.record();
+            records.add(new com.cardpricer.model.TradeRecord(outputDirectory.toAbsolutePath().resolve(r.filename).toString(),
+                    r.date,r.customerName,r.traderName,r.paymentMethod,r.totalValue,r.totalCards,r.tradeId,r.revision,false));
+        }
+        records.sort(Comparator.comparing((com.cardpricer.model.TradeRecord r)->r.date).reversed());
+        return records;
+    }
+
+    Set<String> receiptNames() throws SQLException {
+        var names=new HashSet<String>();
+        try(var c=connect();var s=c.createStatement();var rows=s.executeQuery("SELECT name FROM jobs WHERE name LIKE '%.txt'")) {
+            while(rows.next()) names.add(rows.getString(1));
+        }
+        return names;
+    }
+
+    /** Store the projection with the approved snapshot and jobs, including during migration. */
+    private static void indexHistory(Connection c,TradeDraft draft) throws SQLException {
+        String name="trade_"+draft.id()+".txt", body=null, approved;
+        try(var s=c.prepareStatement("SELECT approved_at FROM trades WHERE id=?")) {
+            s.setString(1,draft.id().toString());try(var rows=s.executeQuery()) { rows.next();approved=rows.getString(1); }
+        }
+        try(var s=c.prepareStatement("SELECT name,content FROM jobs WHERE trade_id=? AND name LIKE '%.txt' ORDER BY id DESC LIMIT 1")) {
+            s.setString(1,draft.id().toString());try(var rows=s.executeQuery()) {
+                if(rows.next()) { name=rows.getString(1);body=rows.getString(2); }
             }
         }
-        return records;
+        var settlement=draft.settle();
+        if(body==null) body=TradeApplicationService.receipt(draft,settlement);
+        var record=new com.cardpricer.model.TradeRecord(name,
+                java.time.LocalDateTime.ofInstant(Instant.parse(approved),java.time.ZoneId.systemDefault()),
+                draft.customer(),draft.trader(),draft.payment(),settlement.market(),
+                draft.lines().stream().mapToInt(line->line.quantity()).sum(),draft.id(),draft.revision(),false);
+        HistoryIndex.put(c,record.historyKey(),"","managed",Long.toString(draft.revision()),new HistoryIndex.Loaded(record,body));
     }
     public void commit(TradeDraft draft, List<Output> outputs) throws SQLException {
         save(draft, outputs, null);
@@ -185,6 +222,7 @@ public final class TradeRepository {
                 try (PreparedStatement s = c.prepareStatement("DELETE FROM drafts WHERE id=?")) {
                     s.setString(1, draft.id().toString()); s.executeUpdate();
                 }
+                indexHistory(c,draft);
                 boundary.accept("beforeCommit");
                 c.commit();
                 boundary.accept("afterCommit");

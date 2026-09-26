@@ -24,7 +24,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -50,7 +49,8 @@ public class FileManagerPanel extends JPanel {
         {"Copy file path",  "Copy full CSV paths; History copies the selected trade's CSV import"},
         {"Delete",          "Permanently remove the selected file"},
         {"--- History", ""},
-        {"Search",          "Filter trade history by customer or date"},
+        {"Search",          "Search all trade history by customer, date, or receipt text"},
+        {"Load 100 more",   "Show older trades; totals include all matching trades"},
         {"Print",           "Send the selected trade receipt to a printer"},
         {"Save PDF",        "Export the selected trade receipt as a PDF"},
         {"Open in Explorer","Reveal the receipt file in Windows Explorer"},
@@ -79,20 +79,35 @@ public class FileManagerPanel extends JPanel {
     private JCheckBox inventoriedCheck;
     private JButton editTradeButton;
     private JButton revisionHistoryButton;
+    private JButton histPrintBtn, histPdfBtn, historyLoadMore;
     private boolean inventorySavePending;
     private JLabel inventorySyncLabel;
     private boolean historyRefreshRunning;
     private long inventorySyncGeneration=-1;
+    private long lastHistoryScan;
+    private boolean historyRefreshRequested, renderingHistory;
+    private TradeHistoryService.Session historySession;
+    private TradeHistoryService.Snapshot historySnapshot;
+    private String historySharedFolder;
+    private int historyLimit=100, historyMatchCount;
+    private String completedHistoryQuery="", previewToken;
+    private java.util.Set<String> historySearchMatches=java.util.Set.of();
+    private long searchGeneration, previewGeneration;
+    private SwingWorker<?,?> searchWorker, previewWorker;
+    private final Timer historySearchTimer=new Timer(250,e->searchHistory());
     private final Timer inventoryRefreshTimer=new Timer(2_000,e -> {
         if (!isShowing() || tabs.getSelectedIndex()!=2) return;
         inventorySyncLabel.setText(com.cardpricer.service.InventoryStatusSyncService.status());
-        if (inventorySyncGeneration!=com.cardpricer.service.InventoryStatusSyncService.generation()) refreshHistoryList(false);
+        if (inventorySyncGeneration!=com.cardpricer.service.InventoryStatusSyncService.generation()
+                || System.currentTimeMillis()-lastHistoryScan>=15_000) refreshHistoryList(false);
     });
     private java.util.function.Consumer<com.cardpricer.model.TradeDraft> tradeEditor;
     private List<TradeRecord> allRecords = new ArrayList<>();
 
-    // F11: Content cache for full-text search
-    private final Map<String, String> contentCache = new HashMap<>();
+    // Only recently selected previews live in memory; full-text search uses the persistent index.
+    private final Map<String, String> contentCache = new java.util.LinkedHashMap<>(32,0.75f,true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<String,String> entry) { return size()>32; }
+    };
 
     // F13: Stats bar labels
     private JLabel historyStatsTotalTrades;
@@ -113,6 +128,7 @@ public class FileManagerPanel extends JPanel {
 
     /** Constructs the File Manager panel and loads the local file list immediately. */
     public FileManagerPanel() {
+        historySearchTimer.setRepeats(false);
         setLayout(new BorderLayout(15, 15));
         setBorder(new EmptyBorder(16, 20, 14, 20));
 
@@ -193,8 +209,18 @@ public class FileManagerPanel extends JPanel {
 
     public void setTradeEditor(java.util.function.Consumer<com.cardpricer.model.TradeDraft> editor) { tradeEditor=editor; }
 
-    @Override public void addNotify() { super.addNotify();inventoryRefreshTimer.start(); }
-    @Override public void removeNotify() { inventoryRefreshTimer.stop();super.removeNotify(); }
+    @Override public void addNotify() {
+        super.addNotify();inventoryRefreshTimer.start();
+        if(historySnapshot!=null) { filterHistory(false);loadHistoryPreview(); }
+    }
+    @Override public void removeNotify() {
+        inventoryRefreshTimer.stop();historySearchTimer.stop();
+        historyGeneration++;historyRefreshRequested=false;
+        searchGeneration++;previewGeneration++;
+        if(searchWorker!=null) searchWorker.cancel(true);
+        if(previewWorker!=null) previewWorker.cancel(true);
+        super.removeNotify();
+    }
 
     private JPanel createLocalTab() {
         JPanel tab = new JPanel(new BorderLayout(10, 10));
@@ -643,12 +669,14 @@ public class FileManagerPanel extends JPanel {
         previewScroll.setBorder(AppTheme.sectionBorder("Receipt preview"));
 
         // Action buttons below preview
-        JButton histPrintBtn = new JButton("Print");
+        histPrintBtn = new JButton("Print");
+        histPrintBtn.setEnabled(false);
 
 
         histPrintBtn.addActionListener(e -> historyPrint());
 
-        JButton histPdfBtn = new JButton("Save as PDF");
+        histPdfBtn = new JButton("Save as PDF");
+        histPdfBtn.setEnabled(false);
 
 
         histPdfBtn.addActionListener(e -> historySaveAsPdf());
@@ -714,6 +742,10 @@ public class FileManagerPanel extends JPanel {
         statsBar.add(historyStatsTotalCards);
         statsBar.add(historyStatsTotalValue);
         statsBar.add(historyStatsAvgValue);
+        historyLoadMore=new JButton("Load 100 more");
+        historyLoadMore.setVisible(false);
+        historyLoadMore.addActionListener(e->{ historyLimit+=100;renderHistory(); });
+        statsBar.add(historyLoadMore);
         tab.add(statsBar, BorderLayout.SOUTH);
 
         return tab;
@@ -724,118 +756,148 @@ public class FileManagerPanel extends JPanel {
     private void refreshHistoryList() { refreshHistoryList(true); }
 
     private void refreshHistoryList(boolean requestSync) {
-        if (historyRefreshRunning || inventorySavePending) return;
+        if (historyRefreshRunning || inventorySavePending) {
+            if(requestSync) historyRefreshRequested=true;
+            return;
+        }
         historyRefreshRunning=true;
+        historyRefreshRequested=false;
         if (requestSync) com.cardpricer.service.InventoryStatusSyncService.requestSync();
         long syncGeneration=com.cardpricer.service.InventoryStatusSyncService.generation();
         long generation=++historyGeneration;
-        historyStatusLabel.setText("Loading...");
-        java.util.Map<String,String> loadedContent=new java.util.HashMap<>();
-        new SwingWorker<List<com.cardpricer.model.TradeRecord>, Void>() {
-            @Override
-            protected List<com.cardpricer.model.TradeRecord> doInBackground() {
-                var records=TradeHistoryService.loadAll(com.cardpricer.util.AppDataDirectory.tradesPath());
-                for (var record:records) try { loadedContent.put(record.filename,TradeHistoryService.receiptContent(record,com.cardpricer.util.AppDataDirectory.tradesPath())); }
-                catch (Exception failure) { loadedContent.put(record.filename,"Could not load receipt: "+failure.getMessage()); }
-                return records;
+        String shared=PreferencesPanel.getSharedTradesFolder();
+        var existing=java.util.Objects.equals(shared,historySharedFolder) ? historySession : null;
+        if(historySnapshot==null) historyStatusLabel.setText("Loading history...");
+        new SwingWorker<TradeHistoryService.Snapshot, TradeHistoryService.Snapshot>() {
+            private TradeHistoryService.Session session;
+            @Override protected TradeHistoryService.Snapshot doInBackground() throws Exception {
+                session=existing==null ? new TradeHistoryService.Session(com.cardpricer.util.AppDataDirectory.tradesPath(),shared) : existing;
+                publish(session.cached());
+                return session.refresh();
             }
-            @Override
-            protected void done() {
+            @Override protected void process(List<TradeHistoryService.Snapshot> snapshots) {
+                if(generation!=historyGeneration) return;
+                historySession=session;historySharedFolder=shared;
+                acceptHistorySnapshot(snapshots.getLast());
+            }
+            @Override protected void done() {
                 try {
                     if (generation!=historyGeneration) return;
-                    TradeRecord selected=selectedRecord();
-                    int caret=historyPreviewArea.getCaretPosition();
-                    allRecords = get();
-                    contentCache.clear(); contentCache.putAll(loadedContent);
-                    applyHistoryFilter();
-                    if (selected!=null) selectHistoryRecord(selected.historyKey());
-                    historyPreviewArea.setCaretPosition(Math.min(caret,historyPreviewArea.getDocument().getLength()));
+                    var snapshot=get();
+                    historySession=session;historySharedFolder=shared;
+                    acceptHistorySnapshot(snapshot);
                     inventorySyncGeneration=syncGeneration;
                 } catch (Exception ex) {
-                    historyStatusLabel.setText("Could not load history: " + errorMessage(ex));
-                } finally { historyRefreshRunning=false; }
+                    historyStatusLabel.setText("Could not refresh history: " + errorMessage(ex));
+                } finally {
+                    historyRefreshRunning=false;lastHistoryScan=System.currentTimeMillis();
+                    if(historyRefreshRequested) refreshHistoryList();
+                }
             }
         }.execute();
     }
 
-    private final java.util.List<TradeRecord> visibleRecords = new java.util.ArrayList<>();
-
-    private void applyHistoryFilter() {
-        String filter = historySearchField == null ? "" : historySearchField.getText().trim().toLowerCase();
-
-        // F12: Payment filter
-        String paymentFilter = (historyPaymentCombo == null)
-                ? "All" : (String) historyPaymentCombo.getSelectedItem();
-
-        historyTableModel.setRowCount(0);
-        visibleRecords.clear();
-        int shown = 0;
-        for (TradeRecord r : allRecords) {
-            int inventoryFilter=historyInventoryFilter==null ? 0 : historyInventoryFilter.getSelectedIndex();
-            if ((inventoryFilter==1 && r.inventoried) || (inventoryFilter==2 && !r.inventoried)) continue;
-            // F12: Apply payment method filter first
-            if (!"All".equals(paymentFilter)
-                    && !r.paymentMethod.toLowerCase().contains(paymentFilter.toLowerCase())) {
-                continue;
-            }
-
-            // Text filter: check customer name, then date string, then full file content (F11)
-            if (!filter.isEmpty()) {
-                boolean nameMatch  = r.customerName.toLowerCase().contains(filter);
-                boolean dateMatch  = r.date.format(HISTORY_DATE_FMT).toLowerCase().contains(filter);
-                boolean bodyMatch  = !nameMatch && !dateMatch
-                        && getOrLoadContent(r.filename).toLowerCase().contains(filter);
-                if (!nameMatch && !dateMatch && !bodyMatch) continue;
-            }
-
-            visibleRecords.add(r);
-            historyTableModel.addRow(new Object[]{
-                    r.date.format(HISTORY_DATE_FMT),
-                    r.customerName,
-                    r.paymentMethod,
-                    String.format(java.util.Locale.ROOT, "$%.2f", r.totalValue),
-                    r.totalCards,
-                    r.inventoried
-            });
-            shown++;
+    private void acceptHistorySnapshot(TradeHistoryService.Snapshot snapshot) {
+        boolean same=historySnapshot!=null && historySnapshot.tokens().equals(snapshot.tokens())
+                && allRecords.size()==snapshot.records().size();
+        if(same) for(int i=0;i<allRecords.size();i++) {
+            var old=allRecords.get(i);var next=snapshot.records().get(i);
+            if(!old.historyKey().equals(next.historyKey()) || old.inventoried!=next.inventoried) { same=false;break; }
         }
-        if (historyStatusLabel != null) {
-            historyStatusLabel.setText(shown + " record(s) found");
+        boolean contentsChanged=historySnapshot==null || !historySnapshot.tokens().equals(snapshot.tokens());
+        historySnapshot=snapshot;
+        if(same) { updateHistoryCount();return; }
+        allRecords=new ArrayList<>(snapshot.records());
+        contentCache.keySet().retainAll(snapshot.tokens().values());
+        if(contentsChanged) {
+            // Replace changed rows and invalidate their previews while the new search runs.
+            if(!historyQuery().isEmpty()) { completedHistoryQuery=historyQuery();renderHistory(); }
+            completedHistoryQuery=null;
         }
-        updateHistoryStats(); // F13
+        filterHistory(false);
     }
 
-    /** F11: Returns cached file content, loading on first access. */
-    private String getOrLoadContent(String filename) { return contentCache.getOrDefault(filename, ""); }
+    private final java.util.List<TradeRecord> visibleRecords = new java.util.ArrayList<>();
 
-    /** F13: Updates the stats bar with counts and values from the current filtered table. */
-    private void updateHistoryStats() {
-        if (historyStatsTotalTrades == null) return;
-        int tradeCount = historyTableModel.getRowCount();
-        int cardCount  = 0;
-        java.math.BigDecimal totalValue = java.math.BigDecimal.ZERO;
+    private String historyQuery() { return historySearchField.getText().trim().toLowerCase(java.util.Locale.ROOT); }
 
-        for (int i = 0; i < tradeCount; i++) {
-            Object cardsObj = historyTableModel.getValueAt(i, 4);
-            if (cardsObj instanceof Integer) {
-                cardCount += (Integer) cardsObj;
-            } else {
-                try { cardCount += Integer.parseInt(cardsObj.toString()); } catch (Exception ignored) {}
-            }
-            String valStr = historyTableModel.getValueAt(i, 3).toString()
-                    .replace("$", "").replace(",", "").trim();
-            try { totalValue = totalValue.add(new java.math.BigDecimal(valStr)); } catch (Exception ignored) {}
+    private void applyHistoryFilter() { filterHistory(true); }
+
+    private void filterHistory(boolean resetPage) {
+        if(resetPage) historyLimit=100;
+        String query=historyQuery();
+        historySearchTimer.stop();
+        searchGeneration++;
+        if(searchWorker!=null) searchWorker.cancel(true);
+        if(query.isEmpty()) { completedHistoryQuery="";renderHistory(); }
+        else if(query.equals(completedHistoryQuery)) renderHistory();
+        else {
+            historyStatusLabel.setText("Searching all history...");
+            historySearchTimer.restart();
         }
+    }
 
-        java.math.BigDecimal avgValue = tradeCount > 0
-                ? totalValue.divide(java.math.BigDecimal.valueOf(tradeCount), 2,
-                    java.math.RoundingMode.HALF_UP)
-                : java.math.BigDecimal.ZERO;
+    private void searchHistory() {
+        if(historySession==null || historySnapshot==null) return;
+        String query=historyQuery();long generation=++searchGeneration;
+        var session=historySession;var snapshot=historySnapshot;
+        searchWorker=new SwingWorker<java.util.Set<String>,Void>() {
+            protected java.util.Set<String> doInBackground() throws Exception { return session.search(snapshot,query); }
+            protected void done() {
+                if(generation!=searchGeneration) return;
+                try { historySearchMatches=get();completedHistoryQuery=query;renderHistory(); }
+                catch(Exception failure) { historyStatusLabel.setText("Could not search history: "+errorMessage(failure)); }
+            }
+        };
+        searchWorker.execute();
+    }
 
-        historyStatsTotalTrades.setText("Trades: " + tradeCount);
-        historyStatsTotalCards.setText("  Cards: " + cardCount);
-        historyStatsTotalValue.setText(String.format(java.util.Locale.ROOT, "  Total: $%.2f", totalValue));
-        historyStatsAvgValue.setText(String.format(java.util.Locale.ROOT, "  Avg: $%.2f", avgValue));
+    private void renderHistory() {
+        TradeRecord selected=selectedRecord();
+        String filter=historyQuery();
+        if(!filter.equals(completedHistoryQuery)) return;
+        String paymentFilter=(String)historyPaymentCombo.getSelectedItem();
+        int inventoryFilter=historyInventoryFilter.getSelectedIndex();
+        int cardCount=0;BigDecimal totalValue=BigDecimal.ZERO;
+        historyMatchCount=0;
+        var rows=new java.util.Vector<java.util.Vector<Object>>();
+        renderingHistory=true;
+        try {
+            visibleRecords.clear();
+            for(TradeRecord r:allRecords) {
+                if((inventoryFilter==1 && r.inventoried) || (inventoryFilter==2 && !r.inventoried)) continue;
+                if(!"All".equals(paymentFilter) && !r.paymentMethod.toLowerCase(java.util.Locale.ROOT).contains(paymentFilter.toLowerCase(java.util.Locale.ROOT))) continue;
+                if(!filter.isEmpty() && !historySearchMatches.contains(r.historyKey())) continue;
+                historyMatchCount++;cardCount+=r.totalCards;totalValue=totalValue.add(r.totalValue);
+                if(visibleRecords.size()>=historyLimit) continue;
+                visibleRecords.add(r);
+                rows.add(new java.util.Vector<>(List.of(r.date.format(HISTORY_DATE_FMT),r.customerName,r.paymentMethod,
+                        String.format(java.util.Locale.ROOT,"$%.2f",r.totalValue),r.totalCards,r.inventoried)));
+            }
+            // One table event avoids sorting once per inserted receipt and preserves column widths.
+            historyTableModel.getDataVector().clear();historyTableModel.getDataVector().addAll(rows);
+            historyTableModel.fireTableDataChanged();
+            historyTable.clearSelection();
+            if(selected!=null) selectHistoryRecord(selected.historyKey());
+        } finally { renderingHistory=false; }
+        loadHistoryPreview();
+        updateHistoryCount();
+        historyLoadMore.setVisible(historyMatchCount>visibleRecords.size());
+        BigDecimal average=historyMatchCount==0 ? BigDecimal.ZERO : totalValue.divide(BigDecimal.valueOf(historyMatchCount),2,java.math.RoundingMode.HALF_UP);
+        historyStatsTotalTrades.setText("Trades: "+historyMatchCount);
+        historyStatsTotalCards.setText("  Cards: "+cardCount);
+        historyStatsTotalValue.setText(String.format(java.util.Locale.ROOT,"  Total: $%.2f",totalValue));
+        historyStatsAvgValue.setText(String.format(java.util.Locale.ROOT,"  Avg: $%.2f",average));
+    }
+
+    private void updateHistoryCount() {
+        if(!historyQuery().equals(completedHistoryQuery)) return;
+        String notice=historySnapshot==null ? "" : historySnapshot.notice();
+        historyStatusLabel.setText("Showing "+visibleRecords.size()+" of "+historyMatchCount+" trades"+(notice.isEmpty() ? "" : " | "+notice));
+    }
+
+    private String cachedReceipt(TradeRecord record) {
+        return record==null || historySnapshot==null ? null : contentCache.get(historySnapshot.token(record));
     }
 
     /** Returns the TradeRecord for the currently selected history row, or null. */
@@ -847,15 +909,39 @@ public class FileManagerPanel extends JPanel {
     }
 
     private void loadHistoryPreview() {
+        if(renderingHistory) return;
         TradeRecord record=selectedRecord();
-        historyPreviewArea.setText(record==null ? "" : getOrLoadContent(record.filename));
+        String token=record==null || historySnapshot==null ? null : historySnapshot.token(record);
+        String content=cachedReceipt(record);
+        updateReceiptActions(record,content!=null);
+        if(token!=null && token.equals(previewToken) && content!=null) return;
+        previewToken=token;
+        long generation=++previewGeneration;
+        if(previewWorker!=null) previewWorker.cancel(true);
+        historyPreviewArea.setText(content!=null ? content : record==null ? "" : "Loading receipt...");
         historyPreviewArea.setCaretPosition(0);
-        if (inventoriedCheck!=null) {
-            inventoriedCheck.setSelected(record!=null && record.inventoried);
-            inventoriedCheck.setEnabled(record!=null && !inventorySavePending);
-        }
-        if (editTradeButton!=null) editTradeButton.setEnabled(record!=null && !inventorySavePending);
-        if (revisionHistoryButton!=null) revisionHistoryButton.setEnabled(record!=null && record.tradeId!=null);
+        if(record==null || content!=null || historySession==null) return;
+        var session=historySession;var snapshot=historySnapshot;
+        previewWorker=new SwingWorker<String,Void>() {
+            protected String doInBackground() throws Exception { return session.receipt(snapshot,record); }
+            protected void done() {
+                if(generation!=previewGeneration) return;
+                try {
+                    String body=get();contentCache.put(token,body);
+                    historyPreviewArea.setText(body);historyPreviewArea.setCaretPosition(0);
+                    updateReceiptActions(selectedRecord(),true);
+                } catch(Exception failure) { historyPreviewArea.setText("Could not load receipt: "+errorMessage(failure)); }
+            }
+        };
+        previewWorker.execute();
+    }
+
+    private void updateReceiptActions(TradeRecord record,boolean ready) {
+        inventoriedCheck.setSelected(record!=null && record.inventoried);
+        inventoriedCheck.setEnabled(record!=null && !inventorySavePending);
+        editTradeButton.setEnabled(record!=null && !inventorySavePending && (record.tradeId!=null || ready));
+        revisionHistoryButton.setEnabled(record!=null && record.tradeId!=null);
+        histPrintBtn.setEnabled(record!=null && ready);histPdfBtn.setEnabled(record!=null && ready);
     }
 
     private void saveInventoryStatus() {
@@ -876,7 +962,7 @@ public class FileManagerPanel extends JPanel {
                     get();
                     historyGeneration++;
                     allRecords.replaceAll(r -> r.historyKey().equals(record.historyKey()) && r.revision==record.revision ? r.withInventoried(value) : r);
-                    applyHistoryFilter();
+                    filterHistory(false);
                     selectHistoryRecord(record.historyKey());
                     historyStatusLabel.setText(value ? "Marked inventoried into POS" : "Marked as needing POS inventory");
                     inventorySyncLabel.setText("POS status: saved locally; syncing...");
@@ -921,7 +1007,9 @@ public class FileManagerPanel extends JPanel {
     }
 
     private void editLegacyReceipt(TradeRecord record) {
-        JTextArea text=new JTextArea(getOrLoadContent(record.filename),24,70);
+        String body=cachedReceipt(record);
+        if(body==null) return;
+        JTextArea text=new JTextArea(body,24,70);
         text.setFont(new Font("Monospaced",Font.PLAIN,13));
         JPanel editor=new JPanel(new BorderLayout(8,8));
         editor.add(new JLabel("Older receipt: edit its text below. The original is backed up; POS exports are not recalculated."),BorderLayout.NORTH);
@@ -976,7 +1064,8 @@ public class FileManagerPanel extends JPanel {
             return;
         }
         try {
-            String content = TradeHistoryService.receiptContent(r,com.cardpricer.util.AppDataDirectory.tradesPath());
+            String content = cachedReceipt(r);
+            if(content==null) return;
             ReceiptPrintService.printReceipt(this, content);
         } catch (Exception e) {
             JOptionPane.showMessageDialog(this, "Could not read file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
@@ -990,7 +1079,8 @@ public class FileManagerPanel extends JPanel {
             return;
         }
         try {
-            String content = TradeHistoryService.receiptContent(r,com.cardpricer.util.AppDataDirectory.tradesPath());
+            String content = cachedReceipt(r);
+            if(content==null) return;
             String pdfPath = r.filename.replace(".txt", ".pdf");
             ReceiptPrintService.saveAsPdf(this, content, pdfPath);
         } catch (Exception e) {

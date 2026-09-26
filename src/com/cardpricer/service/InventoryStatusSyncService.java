@@ -101,12 +101,13 @@ public final class InventoryStatusSyncService {
                 status="POS status: syncing...";
                 var repository=new TradeRepository(AppDataDirectory.root().toPath().resolve("ledger/trades.sqlite"));
                 Result result=new InventoryStatusSyncService(repository).sync(Path.of(shared));
+                if (result.imported()>0) GENERATION.incrementAndGet();
                 status=result.errors()==0 ? "POS status: synced with shared folder"
                         : "POS status: "+result.errors()+" shared update(s) need retry or review";
             } catch (Exception failure) {
                 status="POS status: saved locally; network sync pending";
             } finally {
-                GENERATION.incrementAndGet();QUEUED.set(false);
+                QUEUED.set(false);
                 if (RESYNC_REQUESTED.getAndSet(false)) requestSync();
             }
         });
