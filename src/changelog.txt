@@ -1,3 +1,5 @@
+v5.0.6
+
 v5.0.5
 - History shows saved summaries immediately, caches local/shared receipts, and checks only changed files in the background.
 - Receipt previews load on selection; search covers all saved history, with 100 trades shown initially and a Load 100 more button.
