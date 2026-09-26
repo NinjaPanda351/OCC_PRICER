@@ -554,21 +554,31 @@ public class TradePanel extends JPanel {
         cardTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         cardTable.setToolTipText("Ctrl-click or Shift-click to highlight multiple cards. Remove selected removes highlighted or checked cards.");
 
-        // Card image hover popup — show card art while hovering over a table row
+        // Show card art only while hovering over the Card Name column.
         cardTable.addMouseMotionListener(new java.awt.event.MouseMotionAdapter() {
             @Override
             public void mouseMoved(MouseEvent e) {
                 int row = cardTable.rowAtPoint(e.getPoint());
-                if (row < 0) { getImagePopup().hide(); return; }
+                int column = cardTable.columnAtPoint(e.getPoint());
+                if (row < 0 || column < 0 || cardTable.convertColumnIndexToModel(column) != 2) {
+                    if (imagePopup != null) imagePopup.hide();
+                    return;
+                }
                 int modelRow = cardTable.convertRowIndexToModel(row);
-                if (modelRow < 0 || modelRow >= receivedCards.size()) { getImagePopup().hide(); return; }
-                String url = receivedCards.get(modelRow).getCard().getImageUrl();
+                String url = modelRow >= 0 && modelRow < receivedCards.size()
+                        ? receivedCards.get(modelRow).getCard().getImageUrl() : null;
+                if (url == null || url.isBlank()) {
+                    if (imagePopup != null) imagePopup.hide();
+                    return;
+                }
                 getImagePopup().show(url, e.getLocationOnScreen());
             }
+            @Override
+            public void mouseDragged(MouseEvent e) { if (imagePopup != null) imagePopup.hide(); }
         });
         cardTable.addMouseListener(new MouseAdapter() {
             @Override
-            public void mouseExited(MouseEvent e) { getImagePopup().hide(); }
+            public void mouseExited(MouseEvent e) { if (imagePopup != null) imagePopup.hide(); }
         });
 
         // Enable table sorting with 3-state cycle: asc → desc → insertion order
