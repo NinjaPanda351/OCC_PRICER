@@ -12,7 +12,7 @@ The receiving POS requires commas in card names to be replaced with the literal 
 | 2 | DEPARTMENT | Existing value `5` |
 | 3 | CATEGORY | Existing value `5.2` |
 | 4 | TYPE | Empty |
-| 5 | CODE | POS set alias, exact collector identifier and finish suffix |
+| 5 | CODE | POS set alias, collector identifier and finish suffix, with set promos mapped to base foils |
 | 6 | ITEM TYPE | Empty |
 | 7 | ORDER NO | Empty |
 | 8 | DESCRIPTION | Full name and finish |
@@ -30,8 +30,10 @@ The receiving POS requires commas in card names to be replaced with the literal 
 
 The sum of extended costs equals the settlement allocation for included stock lines. MISC remains in the settlement and receipt but has no stock row. When a line's exact acquisition cost is not divisible into identical cent-denominated unit costs, it produces two quantity rows whose combined cost and quantity reconcile exactly.
 
-Provider identity stays unchanged internally. Existing COK/XED aliases map only at export. Finishes remain distinct (`F`, `E`, `S`); the adapter rejects collisions between different provider identities. Confirm whether the POS accepts collector markers, PLST identifiers and distinct finish suffixes. Do not silently collapse these to generic foil.
+Provider identity stays unchanged internally. Existing COK/XED aliases map only at export. Trade exports map P-prefixed promos of recognized base sets to base-set foil stock: `PWAR 220s` → `WAR 220F`, `PEOE 210p` → `EOE 210F`. Numeric promo collector numbers may include `p`, `s`, or star markers, which are removed for this mapping. Promo and base-foil lines may share a code when their card names and languages match; unrelated identity collisions still fail. Original promo valuations and acquisition costs are preserved. Other finishes remain distinct (`F`, `E`, `S`), and ordinary sets such as PIP/PCY and PLST composite identifiers retain their existing mapping.
 
 Other supported schemas remain Import Utility (8 columns), Item Wizard (9 columns), and Item Wizard Change Qty (5 columns). The zero-quantity mode is the same for combined and individual exports. Inventory Change Qty is a snapshot, with blank old quantity and explicit new quantity; zero can reset stock.
+
+Trade-to-inventory Change Qty output combines quantities for lines sharing an inventory code, including promo/base aliases, so repeated rows cannot overwrite part of the count. Receiving exports keep separate rows to preserve approved costs.
 
 Unresolved external acceptance: actual tax/category meanings, condition representation, per-unit versus extended acquisition cost semantics, duplicate SKU rows for cent allocation, quantity update semantics and all finish/legacy aliases.

@@ -39,15 +39,15 @@ public class FileManagerPanel extends JPanel {
     private static final String[] HELP_COLS  = {"Tab / Feature", "Description"};
     private static final String[][] HELP_ROWS = {
         {"--- Tabs", ""},
-        {"Local Files",     "Files saved by this app on this machine"},
-        {"Shared Files",    "Files in the shared network folder (set in Preferences)"},
+        {"Local Files",     "CSV imports saved by this app on this machine"},
+        {"Shared Files",    "CSV imports in the shared network folder (set in Preferences)"},
         {"History",         "Browse and preview past trade receipts"},
         {"--- Local / Shared", ""},
         {"Filter",          "Narrow the file list by category"},
         {"Refresh",         "Reload the file list from disk"},
         {"Open",            "Open the file with your default application"},
         {"Copy to Local",   "Copy a shared file into local storage"},
-        {"Copy file path",  "Copy full paths of selected files or a history receipt to the clipboard"},
+        {"Copy file path",  "Copy full CSV paths; History copies the selected trade's CSV import"},
         {"Delete",          "Permanently remove the selected file"},
         {"--- History", ""},
         {"Search",          "Filter trade history by customer or date"},
@@ -142,7 +142,7 @@ public class FileManagerPanel extends JPanel {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
 
         JPanel titlePanel = AppTheme.panelHeader("Files & history",
-                "Browse generated files and trade history");
+                "Browse CSV imports and trade history");
 
         JButton helpBtn = new JButton("?");
 
@@ -280,13 +280,13 @@ public class FileManagerPanel extends JPanel {
                 File dir = new File(path);
                 if (!dir.exists() || !dir.isDirectory()) return null;
                 SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-                File[] files = dir.listFiles(File::isFile);
+                File[] files = dir.listFiles(FileManagerPanel::isCsvImport);
                 List<Object[]> rows = new ArrayList<>();
                 if (files != null) {
                     for (File f : files) {
                         rows.add(new Object[]{
                                 f.getName(),
-                                getFileType(f.getName()),
+                                "CSV",
                                 formatFileSize(f.length()),
                                 fmt.format(new Date(f.lastModified())),
                                 f.getAbsolutePath()
@@ -364,7 +364,7 @@ public class FileManagerPanel extends JPanel {
             }
         };
 
-        fileTable = new com.cardpricer.gui.EmptyStateTable(tableModel, "A home for your saved files", "Trade receipts, pricing exports, and inventory files appear here.");
+        fileTable = new com.cardpricer.gui.EmptyStateTable(tableModel, "A home for your CSV imports", "Trade, pricing, and inventory CSV exports appear here.");
         fileTable.setFont(fileTable.getFont().deriveFont(14f));
         AppTheme.styleTable(fileTable);
         fileTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
@@ -430,26 +430,40 @@ public class FileManagerPanel extends JPanel {
     private JButton createCopyPathButton(JTable table, java.util.function.IntFunction<String> pathAtRow,
                                          JLabel feedback) {
         JButton button = new JButton("Copy file path");
-        button.setToolTipText("Copy the full path; multiple selected paths are copied on separate lines.");
+        button.setToolTipText("Copy the full CSV import path; multiple selected paths are copied on separate lines.");
         button.setEnabled(table.getSelectedRowCount() > 0);
         table.getSelectionModel().addListSelectionListener(e ->
                 button.setEnabled(table.getSelectedRowCount() > 0));
         button.addActionListener(e -> {
             int[] selectedRows = table.getSelectedRows();
             if (selectedRows.length == 0) return;
-            try {
-                List<String> paths = new ArrayList<>();
-                for (int row : selectedRows) {
-                    String path = pathAtRow.apply(table.convertRowIndexToModel(row));
-                    paths.add(Path.of(path).toAbsolutePath().normalize().toString());
-                }
-                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
-                        new StringSelection(String.join(System.lineSeparator(), paths)), null);
-                feedback.setText(paths.size() == 1 ? "File path copied" : paths.size() + " file paths copied");
-            } catch (IllegalStateException | HeadlessException | SecurityException ex) {
-                JOptionPane.showMessageDialog(this, "Could not copy the file path. Please try again.",
-                        "Clipboard unavailable", JOptionPane.ERROR_MESSAGE);
+            List<Path> paths = new ArrayList<>();
+            for (int row : selectedRows) {
+                String path = pathAtRow.apply(table.convertRowIndexToModel(row));
+                paths.add(Path.of(path).toAbsolutePath().normalize());
             }
+            button.setEnabled(false);
+            feedback.setText("Checking CSV files...");
+            // Shared paths can be slow. Check availability off the EDT before copying.
+            new SwingWorker<Boolean, Void>() {
+                @Override protected Boolean doInBackground() {
+                    return paths.stream().allMatch(Files::isRegularFile);
+                }
+                @Override protected void done() {
+                    try {
+                        if (!get()) {
+                            feedback.setText("CSV import file unavailable. Refresh or retry the trade export.");
+                            return;
+                        }
+                        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(
+                                String.join(System.lineSeparator(), paths.stream().map(Path::toString).toList())), null);
+                        feedback.setText(paths.size() == 1 ? "CSV file path copied" : paths.size() + " CSV file paths copied");
+                    } catch (Exception ex) {
+                        JOptionPane.showMessageDialog(FileManagerPanel.this, "Could not copy the CSV file path. Please try again.",
+                                "Copy unavailable", JOptionPane.ERROR_MESSAGE);
+                    } finally { button.setEnabled(table.getSelectedRowCount() > 0); }
+                }
+            }.execute();
         });
         return button;
     }
@@ -482,7 +496,7 @@ public class FileManagerPanel extends JPanel {
                 for (File file : files) {
                     if (file.isFile()) {
                         rows.add(new Object[]{
-                                file.getName(), getFileType(file.getName()),
+                                file.getName(), "CSV",
                                 formatFileSize(file.length()),
                                 dateFormat.format(new Date(file.lastModified())),
                                 file.getAbsolutePath()
@@ -509,7 +523,7 @@ public class FileManagerPanel extends JPanel {
         File dir = new File(dirPath);
 
         if (dir.exists() && dir.isDirectory()) {
-            File[] fileArray = dir.listFiles();
+            File[] fileArray = dir.listFiles(FileManagerPanel::isCsvImport);
             if (fileArray != null) {
                 files.addAll(Arrays.asList(fileArray));
             }
@@ -518,11 +532,8 @@ public class FileManagerPanel extends JPanel {
         return files;
     }
 
-    private String getFileType(String filename) {
-        if (filename.endsWith(".csv")) return "CSV";
-        if (filename.endsWith(".txt")) return "Text";
-        if (filename.endsWith(".pdf")) return "PDF";
-        return "Other";
+    private static boolean isCsvImport(File file) {
+        return file.isFile() && file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".csv");
     }
 
     private String formatFileSize(long bytes) {
@@ -660,7 +671,7 @@ public class FileManagerPanel extends JPanel {
         previewBtns.add(histPdfBtn);
         previewBtns.add(histOpenBtn);
         previewBtns.add(createCopyPathButton(historyTable,
-                row -> visibleRecords.get(row).filename, historyStatusLabel));
+                row -> TradeHistoryService.csvPath(visibleRecords.get(row)).toString(), historyStatusLabel));
 
         JPanel rightPanel = new JPanel(new BorderLayout());
         inventoriedCheck=new JCheckBox("Inventoried into POS");

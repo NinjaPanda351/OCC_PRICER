@@ -31,6 +31,8 @@ Packages stage only the shaded application JAR and third-party notices. Each pac
 
 The **Overview** homepage includes a standalone **Price check** area. Enter a set/collector code (including finish suffixes such as `TDM 3f` or `PLST ARB 1e`), or press **F2 / Ctrl+F** to use the same name-search dialog as trade entry. Entering a name and pressing **Enter** also opens name search. Selecting a card shows its NM market price, condition-adjusted store price, store-credit offer and check offer. Finish and condition selectors use the same pricing and buy-rate rules as Trades; unavailable finish prices display **N/A**. Price checking does not create or modify a trade.
 
+- Each newly loaded homepage price-check card starts at NM. The previous card's condition and prices remain visible until the next result loads.
+- In Trades, `misc` and `MTG misc` open the same manual name/price entry dialog. Vintage cards show art on hover; entering their codes no longer opens a persistent floating image. The high-value confirmation focuses **Add to Trade**, so Enter confirms it.
 - The table owns typed rows with stable line IDs. Quantities, condition and prices feed the same quote and settlement paths. Sorting changes presentation only.
 - Provider set/collector IDs, language, finishes and original names survive lookup and recovery. POS aliases are applied at the output boundary.
 - Default offers remain 50% credit / 40% check. Configured tiers and bounties override these defaults.
@@ -42,6 +44,8 @@ The **Overview** homepage includes a standalone **Price check** area. Enter a se
 ## Storage and recovery
 
 In **Files & history → History**, select a trade to read its receipt, check **Inventoried into POS**, or choose **Edit trade**. Use the POS status filter to find trades still needing inventory. The checkbox syncs across computers running this version and configured with the same **Preferences → Network → Shared Trades Folder**. It tracks completion; it does not send anything to the POS.
+
+**Local Files** and **Shared Files** list CSV imports only. Receipts remain available through **History**, where **Copy file path** copies the CSV for the selected trade revision. If that CSV is unavailable, the action reports it without changing the clipboard.
 
 POS checkbox changes save locally immediately and publish to the shared folder in the background. Computers check for shared changes every 15 seconds, and an open History screen refreshes automatically while keeping the selected trade and filters. **Refresh** or **Retry exports** requests a sync immediately. The label below the checkbox shows whether status is synced, local only, or awaiting network access. Offline changes survive restart and retry automatically when the share returns. Previously saved local checkmarks migrate into the shared history on first sync.
 
@@ -56,6 +60,8 @@ All workstations must use this updated version and a shared network folder that 
 Receipts use labeled sections, numbered card details, per-card payouts and a separate totals section. Older text-only receipts open a text editor with an automatic backup of the original; those edits do not recalculate a POS export. Full editing on another workstation requires the structured trade JSON or a shared revision document.
 
 Trade receiving CSVs replace commas in card names with `ɕ` for POS compatibility, so those names do not need comma-related quotation marks. Saved trades and receipts retain the original names.
+
+Trade receiving and quantity exports map set promos to the base-set foil inventory code: for example, `PWAR 220s` becomes `WAR 220F`, and `PEOE 210p` becomes `EOE 210F`. This applies to P-prefixed versions of recognized base sets with numeric collector numbers and optional `p`, `s`, or star promo markers. Saved trades and receipts retain the original promo printing and approved valuation. Quantity exports combine promo/base aliases into one total per inventory code; receiving rows retain their individual quantities and acquisition costs.
 
 Windows stores data under `%APPDATA%\OCC_Trade_Pricer`; other systems use `~/.occ_trade_pricer`. For isolated verification, `-Dcardpricer.dataDir=/temporary/path` overrides this location.
 

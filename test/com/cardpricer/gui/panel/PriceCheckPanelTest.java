@@ -43,6 +43,11 @@ class PriceCheckPanelTest {
                 field(panel,"conditionCombo",JComboBox.class).setSelectedItem("LP");
                 assertEquals("$20.00",text(panel,"marketLabel"));assertEquals("$16.00",text(panel,"priceLabel"));
                 assertEquals("$8.00",text(panel,"creditLabel"));assertEquals("$6.40",text(panel,"checkLabel"));
+                input.setText("Next card name");
+                panel.getActionMap().get(action).actionPerformed(new ActionEvent(panel,0,"F2"));
+                assertEquals("NM",field(panel,"conditionCombo",JComboBox.class).getSelectedItem());
+                assertEquals("$20.00",text(panel,"priceLabel"));
+                assertEquals("$10.00",text(panel,"creditLabel"));assertEquals("$8.00",text(panel,"checkLabel"));
             } finally {panel.removeNotify();}
         });
     }
@@ -74,6 +79,8 @@ class PriceCheckPanelTest {
                 var card=card();card.setSetCode("PLST");card.setCollectorNumber("ARB-73");return Optional.of(card);
             },new ScryfallApiService(),new BuyRateService(temp.resolve("rates.json")),query->null);
             reference.set(panel);var input=field(panel,"inputField",JTextField.class);
+            panel.displayCard(card(),"");
+            field(panel,"conditionCombo",JComboBox.class).setSelectedItem("DMG");
             input.setText("PLST ARB 73e");input.postActionEvent();
         });
         try {
@@ -81,6 +88,10 @@ class PriceCheckPanelTest {
             assertEquals("PLST ARB-73",seen.get());
             SwingUtilities.invokeAndWait(()->{
                 assertEquals("Etched",field(reference.get(),"finishCombo",JComboBox.class).getSelectedItem());
+                assertEquals("NM",field(reference.get(),"conditionCombo",JComboBox.class).getSelectedItem());
+                assertEquals("$30.00",text(reference.get(),"priceLabel"));
+                assertEquals("$15.00",text(reference.get(),"creditLabel"));
+                assertEquals("$12.00",text(reference.get(),"checkLabel"));
                 assertEquals("",field(reference.get(),"inputField",JTextField.class).getText());
             });
         } finally {SwingUtilities.invokeAndWait(()->reference.get().removeNotify());}

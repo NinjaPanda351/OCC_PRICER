@@ -194,6 +194,7 @@ public final class PriceCheckPanel extends JPanel {
         nameLabel.setText(card.getName());nameLabel.setToolTipText(card.getName());
         printingLabel.setText(card.getSetCode().toUpperCase(java.util.Locale.ROOT)+" #"+card.getCollectorNumber()
                 +"  •  "+(card.getRarity()==null ? "" : card.getRarity()));
+        conditionCombo.setSelectedItem("NM");
         for(int i=0;i<FINISH_CODES.length;i++)if(FINISH_CODES[i].equalsIgnoreCase(finish))finishCombo.setSelectedIndex(i);
         finishCombo.setEnabled(true);conditionCombo.setEnabled(true);updatePrices();
         scrollRectToVisible(new Rectangle(0,0,getWidth(),getHeight()));

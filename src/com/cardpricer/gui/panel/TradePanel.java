@@ -61,7 +61,7 @@ import java.util.function.BiConsumer;
  *   <li>{@code TDM 3e} — etched finish</li>
  *   <li>{@code TDM 3s} — surge foil finish</li>
  *   <li>{@code PLST ARB 1} — The List reprint</li>
- *   <li>{@code misc} — manual entry with custom name and price</li>
+ *   <li>{@code misc} or {@code MTG misc} — manual entry with custom name and price</li>
  * </ul>
  *
  * <p>Prices are fetched from the Scryfall API, rounded via {@link com.cardpricer.service.PricingService},
@@ -91,7 +91,7 @@ public class TradePanel extends JPanel {
         {"TDM 3e",         "Etched finish"},
         {"TDM 3s",         "Surge foil"},
         {"PLST ARB 1",     "The List card (PLST + original set + number)"},
-        {"misc",           "Manual entry — prompts for name & price"},
+        {"misc / MTG misc", "Manual entry — prompts for name & price"},
     };
 
     private final ScryfallApiService apiService;
@@ -365,6 +365,9 @@ public class TradePanel extends JPanel {
 
         // Reload buy rates when this panel becomes visible (Preferences or shared file may have changed)
         addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && !isShowing() && imagePopup != null) {
+                imagePopup.hide();
+            }
             if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && isShowing()) {
                 com.cardpricer.service.TaskCoordinator.submit(buyRateService::pollSharedFolder);
                 int gen = BuyRateService.getSaveGeneration();
@@ -442,7 +445,7 @@ public class TradePanel extends JPanel {
         // Middle: Input field
         JPanel inputPanel = new JPanel(new BorderLayout(10, 5));
 
-        JLabel instructionLabel = AppTheme.mutedLabel("Enter to add  ·  F foil  ·  E etched  ·  S surge  ·  misc for a custom item");
+        JLabel instructionLabel = AppTheme.mutedLabel("Enter to add  ·  F foil  ·  E etched  ·  S surge  ·  misc / MTG misc for a custom item");
         instructionLabel.setToolTipText("Examples: TDM 3, TDM 3f, PLST ARB 1. Ctrl+F or F2 searches by name.");
         inputPanel.setOpaque(false);
         cardCodeField = new JTextField();
@@ -905,7 +908,7 @@ public class TradePanel extends JPanel {
         if (previewTimer != null) previewTimer.stop();
         String input=cardCodeField.getText();
         if (input==null || input.isBlank())return;
-        if ("misc".equalsIgnoreCase(input.trim())) {promptForMiscCard();return;}
+        if (input.trim().matches("(?i)(?:misc|mtg\\s+misc)")) {promptForMiscCard();return;}
         ParsedCode parsed=CardCodeParser.parse(input);
         if (parsed==null) {JOptionPane.showMessageDialog(getParentWindow(),"Use SET NUMBER, with optional F/E/S finish.");return;}
         cardPreviewLabel.setText("Loading...");
@@ -913,10 +916,6 @@ public class TradePanel extends JPanel {
             previewCard=card;previewFinish=parsed.finish;previewOriginalSetCode=parsed.setCode;
             if (!com.cardpricer.gui.panel.trade.TradeEntryPresenter.hasPrice(card,parsed.finish)) {promptForManualPriceOnCard(card,parsed);return;}
             displayPreview(card,parsed.finish);
-            if (VintageUtil.isVintageSet(card.getSetCode()) && card.getImageUrl()!=null) {
-                try {Point point=cardPreviewLabel.getLocationOnScreen();getImagePopup().show(card.getImageUrl(),point);}
-                catch (IllegalComponentStateException ignored) {}
-            }
             addCard();
         },failure -> {
             if (failure.getMessage()!=null && failure.getMessage().contains("not found"))promptForManualPrice(parsed);
@@ -1881,6 +1880,7 @@ public class TradePanel extends JPanel {
      * @return {@code true} if the user confirmed; {@code false} to cancel
      */
     private boolean confirmHighValueAdd(Card card, BigDecimal price) {
+        if (imagePopup != null) imagePopup.hide();
         JDialog dialog = new JDialog(getParentWindow(),
                 "Verify High-Value Card", java.awt.Dialog.ModalityType.APPLICATION_MODAL);
         dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
@@ -1981,6 +1981,12 @@ public class TradePanel extends JPanel {
         main.add(buttons,   BorderLayout.SOUTH);
 
         dialog.setContentPane(main);
+        dialog.getRootPane().setDefaultButton(addBtn);
+        dialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override public void windowOpened(java.awt.event.WindowEvent event) {
+                addBtn.requestFocusInWindow();
+            }
+        });
         dialog.pack();
         dialog.setMinimumSize(new Dimension(500, 300));
         dialog.setLocationRelativeTo(getParentWindow());
@@ -2047,7 +2053,7 @@ public class TradePanel extends JPanel {
 
     /** Returns {@code true} if there are cards in the table that have not been saved. */
     public void flushDraftOnClose() { performAutosave(); TradeSessionService.flush(); }
-    public void disposeResources() { if (previewTimer!=null) previewTimer.stop(); autosaveTimer.stop(); syncTimer.stop(); draftGeneration++; entryPresenter.cancel(); previewGeneration++; }
+    public void disposeResources() { if (previewTimer!=null) previewTimer.stop(); autosaveTimer.stop(); syncTimer.stop(); draftGeneration++; entryPresenter.cancel(); previewGeneration++; if (imagePopup!=null) imagePopup.dispose(); }
 
     public boolean hasUnsavedCards() {
         return editingRevision!=null || !receivedCards.isEmpty();
