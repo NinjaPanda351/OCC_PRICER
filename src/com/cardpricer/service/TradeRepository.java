@@ -27,8 +27,8 @@ public final class TradeRepository {
         try (Connection connection = connect(); Statement s = connection.createStatement()) {
             int version;
             try (ResultSet rs = s.executeQuery("PRAGMA user_version")) { version = rs.getInt(1); }
-            if (version > 4) throw new SQLException("Ledger was created by a newer application");
-            if (version == 4) return;
+            if (version > 5) throw new SQLException("Ledger was created by a newer application");
+            if (version == 5) return;
             s.execute("PRAGMA journal_mode=WAL");
             s.execute("CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY, revision INTEGER NOT NULL, snapshot TEXT NOT NULL)");
             s.execute("CREATE TABLE IF NOT EXISTS trades(id TEXT PRIMARY KEY, approved_at TEXT NOT NULL, snapshot TEXT NOT NULL)");
@@ -68,6 +68,12 @@ public final class TradeRepository {
                     connection.commit();
                 } catch (Exception failure) { connection.rollback();throw failure; }
             }
+            if(version<5) {
+                connection.setAutoCommit(false);
+                try {
+                    TradeDeletionStore.create(connection);s.execute("PRAGMA user_version=5");connection.commit();
+                } catch(Exception failure) { connection.rollback();throw failure; }
+            }
         }
     }
     Connection connect() throws SQLException {
@@ -93,6 +99,25 @@ public final class TradeRepository {
         try (Connection c = connect(); PreparedStatement s = c.prepareStatement("SELECT 1 FROM trades WHERE id=?")) {
             s.setString(1, id.toString()); try (ResultSet rs = s.executeQuery()) { return rs.next(); }
         }
+    }
+    public void requireActive(UUID id) throws SQLException {
+        try(var c=connect()) { requireActive(c,id); }
+    }
+    private static void requireActive(Connection c,UUID id) throws SQLException {
+        if(TradeDeletionStore.contains(c,"trade:"+id,"")) throw new SQLException("This trade was deleted and cannot be restored or edited");
+    }
+    UUID tradeForOutput(String name) throws SQLException {
+        try(var c=connect();var s=c.prepareStatement("SELECT trade_id FROM jobs WHERE name=?")) {
+            s.setString(1,name);try(var rows=s.executeQuery()) { if(rows.next()) return UUID.fromString(rows.getString(1)); }
+        }
+        String receipt=name.substring(0,name.lastIndexOf('.'))+".txt";
+        try(var c=connect();var s=c.createStatement();var rows=s.executeQuery("SELECT metadata FROM history_entries")) {
+            while(rows.next()) {
+                var metadata=new JSONObject(rows.getString(1));String id=metadata.getString("id");
+                if(!id.isEmpty() && Path.of(metadata.getString("filename")).getFileName().toString().equalsIgnoreCase(receipt)) return UUID.fromString(id);
+            }
+        }
+        return null;
     }
     public TradeDraft committedDraft(UUID id) throws SQLException {
         try (Connection c=connect(); PreparedStatement s=c.prepareStatement("SELECT snapshot FROM trades WHERE id=?")) {
@@ -176,57 +201,60 @@ public final class TradeRepository {
     }
 
     private void save(TradeDraft draft, List<Output> outputs, Long expectedRevision) throws SQLException {
-        draft.validateForApproval(); // Validate before writing anything.
-        String snapshot = draft.toJson().toString();
-        try (Connection c = connect()) {
-            c.setAutoCommit(false);
-            try {
-                try (PreparedStatement s = c.prepareStatement("SELECT snapshot FROM trades WHERE id=?")) {
-                    s.setString(1, draft.id().toString());
-                    try (ResultSet rs = s.executeQuery()) {
-                        if (rs.next()) {
-                            String previous=rs.getString(1);
-                            if (new JSONObject(previous).similar(new JSONObject(snapshot))) { c.rollback(); return; }
-                            if (expectedRevision == null)
-                                throw new SQLException("This trade is already approved; retry its pending outputs");
-                            TradeDraft old=TradeDraft.fromJson(new JSONObject(previous));
-                            if (old.revision()!=expectedRevision) throw new SQLException("This trade changed since it was opened. Reopen it from History before editing.");
-                            try (PreparedStatement archive=c.prepareStatement("INSERT INTO trade_versions VALUES(?,?,?,?)")) {
-                                archive.setString(1,draft.id().toString());archive.setLong(2,old.revision());
-                                archive.setString(3,previous);archive.setString(4,Instant.now().toString());archive.executeUpdate();
+        synchronized(TradeDeletionService.LOCAL_LOCK) {
+            draft.validateForApproval(); // Validate before writing anything.
+            String snapshot = draft.toJson().toString();
+            try (Connection c = connect()) {
+                c.setAutoCommit(false);
+                try {
+                    requireActive(c,draft.id());
+                    try (PreparedStatement s = c.prepareStatement("SELECT snapshot FROM trades WHERE id=?")) {
+                        s.setString(1, draft.id().toString());
+                        try (ResultSet rs = s.executeQuery()) {
+                            if (rs.next()) {
+                                String previous=rs.getString(1);
+                                if (new JSONObject(previous).similar(new JSONObject(snapshot))) { c.rollback(); return; }
+                                if (expectedRevision == null)
+                                    throw new SQLException("This trade is already approved; retry its pending outputs");
+                                TradeDraft old=TradeDraft.fromJson(new JSONObject(previous));
+                                if (old.revision()!=expectedRevision) throw new SQLException("This trade changed since it was opened. Reopen it from History before editing.");
+                                try (PreparedStatement archive=c.prepareStatement("INSERT INTO trade_versions VALUES(?,?,?,?)")) {
+                                    archive.setString(1,draft.id().toString());archive.setLong(2,old.revision());
+                                    archive.setString(3,previous);archive.setString(4,Instant.now().toString());archive.executeUpdate();
+                                }
+                            } else if (expectedRevision != null) {
+                                throw new SQLException("The original trade could not be found");
                             }
-                        } else if (expectedRevision != null) {
-                            throw new SQLException("The original trade could not be found");
                         }
                     }
-                }
-                try (PreparedStatement s = c.prepareStatement("INSERT INTO trades VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot")) {
-                    s.setString(1, draft.id().toString()); s.setString(2, Instant.now().toString()); s.setString(3, snapshot); s.executeUpdate();
-                }
-                var settled=draft.settle();
-                var allocations=new org.json.JSONArray();
-                for (var allocation:settled.lines()) allocations.put(new JSONObject().put("lineId",allocation.line().id())
-                        .put("credit",allocation.credit().toPlainString()).put("check",allocation.check().toPlainString())
-                        .put("cost",allocation.cost().toPlainString()).put("stock",allocation.line().stock()));
-                var settlementJson=new JSONObject().put("schema",1).put("applicationVersion",com.cardpricer.util.AppVersion.CURRENT)
-                        .put("credit",settled.credit().toPlainString()).put("check",settled.check().toPlainString()).put("allocations",allocations);
-                try (PreparedStatement s=c.prepareStatement("INSERT INTO settlements VALUES(?,?) ON CONFLICT(trade_id) DO UPDATE SET snapshot=excluded.snapshot")) {
-                    s.setString(1,draft.id().toString());s.setString(2,settlementJson.toString());s.executeUpdate();
-                }
-                for (Output output : outputs) {
-                    try (PreparedStatement s = c.prepareStatement("INSERT INTO jobs(trade_id,name,content,hash) VALUES(?,?,?,?)")) {
-                        s.setString(1, draft.id().toString()); s.setString(2, output.name()); s.setString(3, output.content());
-                        s.setString(4, AtomicFiles.hash(output.content().getBytes(StandardCharsets.UTF_8))); s.executeUpdate();
+                    try (PreparedStatement s = c.prepareStatement("INSERT INTO trades VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot")) {
+                        s.setString(1, draft.id().toString()); s.setString(2, Instant.now().toString()); s.setString(3, snapshot); s.executeUpdate();
                     }
-                }
-                try (PreparedStatement s = c.prepareStatement("DELETE FROM drafts WHERE id=?")) {
-                    s.setString(1, draft.id().toString()); s.executeUpdate();
-                }
-                indexHistory(c,draft);
-                boundary.accept("beforeCommit");
-                c.commit();
-                boundary.accept("afterCommit");
-            } catch (Exception failure) { c.rollback(); throw failure; }
+                    var settled=draft.settle();
+                    var allocations=new org.json.JSONArray();
+                    for (var allocation:settled.lines()) allocations.put(new JSONObject().put("lineId",allocation.line().id())
+                            .put("credit",allocation.credit().toPlainString()).put("check",allocation.check().toPlainString())
+                            .put("cost",allocation.cost().toPlainString()).put("stock",allocation.line().stock()));
+                    var settlementJson=new JSONObject().put("schema",1).put("applicationVersion",com.cardpricer.util.AppVersion.CURRENT)
+                            .put("credit",settled.credit().toPlainString()).put("check",settled.check().toPlainString()).put("allocations",allocations);
+                    try (PreparedStatement s=c.prepareStatement("INSERT INTO settlements VALUES(?,?) ON CONFLICT(trade_id) DO UPDATE SET snapshot=excluded.snapshot")) {
+                        s.setString(1,draft.id().toString());s.setString(2,settlementJson.toString());s.executeUpdate();
+                    }
+                    for (Output output : outputs) {
+                        try (PreparedStatement s = c.prepareStatement("INSERT INTO jobs(trade_id,name,content,hash) VALUES(?,?,?,?)")) {
+                            s.setString(1, draft.id().toString()); s.setString(2, output.name()); s.setString(3, output.content());
+                            s.setString(4, AtomicFiles.hash(output.content().getBytes(StandardCharsets.UTF_8))); s.executeUpdate();
+                        }
+                    }
+                    try (PreparedStatement s = c.prepareStatement("DELETE FROM drafts WHERE id=?")) {
+                        s.setString(1, draft.id().toString()); s.executeUpdate();
+                    }
+                    indexHistory(c,draft);
+                    boundary.accept("beforeCommit");
+                    c.commit();
+                    boundary.accept("afterCommit");
+                } catch (Exception failure) { c.rollback(); throw failure; }
+            }
         }
     }
     /** Status belongs to a particular revision: a correction needs POS review again. */
@@ -279,31 +307,34 @@ public final class TradeRepository {
     }
     public List<Job> pending() throws SQLException {
         List<Job> jobs = new ArrayList<>();
-        try (Connection c = connect(); Statement s = c.createStatement(); ResultSet rs = s.executeQuery("SELECT * FROM jobs WHERE status!='done' ORDER BY id")) {
+        try (Connection c = connect(); Statement s = c.createStatement(); ResultSet rs = s.executeQuery("SELECT * FROM jobs WHERE status NOT IN ('done','deleted') ORDER BY id")) {
             while (rs.next()) jobs.add(new Job(rs.getLong("id"), rs.getString("trade_id"), rs.getString("name"),
                     rs.getString("content"), rs.getString("hash"), rs.getInt("attempts")));
         }
         return jobs;
     }
     public void recordAttempt(long id, String error) throws SQLException {
-        try (Connection c = connect(); PreparedStatement s = c.prepareStatement("UPDATE jobs SET status=?,attempts=attempts+1,error=? WHERE id=?")) {
+        try (Connection c = connect(); PreparedStatement s = c.prepareStatement("UPDATE jobs SET status=?,attempts=attempts+1,error=? WHERE id=? AND status!='deleted'")) {
             s.setString(1, error == null ? "done" : "pending"); s.setString(2, error); s.setLong(3, id); s.executeUpdate();
         }
     }
     public int retryOutputs(Path destination) throws SQLException {
-        int failed = 0;
-        for (Job job : pending()) {
-            try {
-                Path root = destination.toAbsolutePath().normalize();
-                Path file = root.resolve(job.name()).normalize();
-                if (!file.getParent().equals(root)) throw new IOException("Invalid output name");
-                if (Files.exists(file)) {
-                    if (!AtomicFiles.hash(Files.readAllBytes(file)).equals(job.hash())) throw new IOException("Existing output has different contents");
-                } else AtomicFiles.write(file, job.content());
-                boundary.accept("afterOutputWrite");
-                recordAttempt(job.id(), null);
-            } catch (IOException e) { recordAttempt(job.id(), e.getMessage()); failed++; }
+        synchronized(TradeDeletionService.LOCAL_LOCK) {
+            int failed = 0;
+            for (Job job : pending()) {
+                if(new TradeDeletionStore(this).contains("trade:"+job.tradeId(),job.name())) continue;
+                try {
+                    Path root = destination.toAbsolutePath().normalize();
+                    Path file = root.resolve(job.name()).normalize();
+                    if (!file.getParent().equals(root)) throw new IOException("Invalid output name");
+                    if (Files.exists(file)) {
+                        if (!AtomicFiles.hash(Files.readAllBytes(file)).equals(job.hash())) throw new IOException("Existing output has different contents");
+                    } else AtomicFiles.write(file, job.content());
+                    boundary.accept("afterOutputWrite");
+                    recordAttempt(job.id(), null);
+                } catch (IOException e) { recordAttempt(job.id(), e.getMessage()); failed++; }
+            }
+            return failed;
         }
-        return failed;
     }
 }

@@ -17,6 +17,7 @@ public final class TradeApplicationService {
         this.repository = repository; this.outputs = outputs; this.shared=shared;
     }
     public int finalizeTrade(TradeDraft draft) throws Exception {
+        repository.requireActive(draft.id());
         draft.validateForApproval();
         TradeDraft existing=repository.committedDraft(draft.id());
         if (existing!=null) {

@@ -1,4 +1,8 @@
-v5.0.6
+v5.0.7
+- Shared buy rates show live sync status and a direct review action beside bounties; review migrates older shared files while preserving backups.
+- Computers without pending edits catch up after missing several rate updates; accepting shared rates no longer creates an unnecessary shared revision.
+- Delete trades everywhere from History or either Files tab; deletion records stop export retries and sync to other computers when they reconnect.
+- Restored the earlier Trade table column proportions and save widths only after manual resizing.
 
 v5.0.5
 - History shows saved summaries immediately, caches local/shared receipts, and checks only changed files in the background.

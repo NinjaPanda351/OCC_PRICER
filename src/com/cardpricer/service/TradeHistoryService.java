@@ -69,13 +69,14 @@ public class TradeHistoryService {
         public Snapshot cached() throws Exception { return snapshot(""); }
 
         public Snapshot refresh() throws Exception {
+            var deletionResult=new TradeDeletionService(repository,local,shared).sync();
             lastReadCount=0;
             lastReadCount+=index.scan(local,"receipt",repository.receiptNames(),false,file -> {
                 var loaded=readReceipt(file);
                 if(loaded.record().tradeId==null) repository.importLegacy(file);
                 return loaded;
             }).reads();
-            String notice="";
+            String notice=deletionResult.pending()>0 ? "Some deletions are waiting for file cleanup or shared sync." : "";
             if(shared!=null) {
                 try {
                     if(!Files.isDirectory(shared)) throw new IOException("Shared folder unavailable");
@@ -122,6 +123,7 @@ public class TradeHistoryService {
         }
 
         public String receipt(Snapshot snapshot,TradeRecord record) throws Exception {
+            if(new TradeDeletionStore(repository).snapshot().contains(record)) throw new IOException("This trade was deleted");
             String source=snapshot.sources().get(record.historyKey());
             String body=source==null ? null : index.body(source,snapshot.token(record));
             if(body==null) throw new IOException("Receipt changed. Refresh History and select it again.");
@@ -207,6 +209,7 @@ public class TradeHistoryService {
     public static com.cardpricer.model.TradeDraft openForEditing(TradeRecord record, String localDirectory, String sharedPath) throws Exception {
         if (record.tradeId==null) throw new IllegalArgumentException("Use the receipt editor for this older trade");
         var repo=repository(localDirectory);
+        repo.requireActive(record.tradeId);
         if (sharedPath!=null && !sharedPath.isBlank())
             return new SharedTradeService(repo,java.nio.file.Path.of(localDirectory),java.nio.file.Path.of(sharedPath)).open(record.tradeId,record.revision);
         if (!repo.sharedSource(record.tradeId).isBlank())
@@ -232,16 +235,19 @@ public class TradeHistoryService {
 
     /** A legacy receipt can be corrected without inventing the missing card snapshots. */
     public static void saveLegacyReceipt(TradeRecord record, String content, String localDirectory) throws Exception {
-        if (record.tradeId != null) throw new IllegalArgumentException("Use the trade editor for a structured trade");
-        if (content.isBlank()) throw new IllegalArgumentException("The receipt cannot be empty");
-        var repo=repository(localDirectory);
-        var source=java.nio.file.Path.of(record.filename);
-        repo.importLegacy(source);
-        var destination=java.nio.file.Path.of(localDirectory).resolve(source.getFileName());
-        if (Files.exists(destination) && !Files.isSameFile(source,destination)) repo.importLegacy(destination);
-        com.cardpricer.util.AtomicFiles.write(destination,content);
-        repo.setInventoried(record,false);
-        InventoryStatusSyncService.requestSync();
+        synchronized(TradeDeletionService.LOCAL_LOCK) {
+            if (record.tradeId != null) throw new IllegalArgumentException("Use the trade editor for a structured trade");
+            if (content.isBlank()) throw new IllegalArgumentException("The receipt cannot be empty");
+            var repo=repository(localDirectory);
+            if(new TradeDeletionStore(repo).snapshot().contains(record)) throw new IOException("This trade was deleted");
+            var source=java.nio.file.Path.of(record.filename);
+            repo.importLegacy(source);
+            var destination=java.nio.file.Path.of(localDirectory).resolve(source.getFileName());
+            if (Files.exists(destination) && !Files.isSameFile(source,destination)) repo.importLegacy(destination);
+            com.cardpricer.util.AtomicFiles.write(destination,content);
+            repo.setInventoried(record,false);
+            InventoryStatusSyncService.requestSync();
+        }
     }
 
     private static LocalDateTime parseDateFromFilename(File file) {

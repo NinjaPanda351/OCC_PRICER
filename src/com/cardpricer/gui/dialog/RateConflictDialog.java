@@ -19,7 +19,8 @@ public final class RateConflictDialog {
             versions.add(version("Saved on this computer", review.localDocument()));
             versions.add(version("Saved in shared folder", review.sharedDocument()));
             JPanel content = new JPanel(new BorderLayout(8, 8));
-            content.add(new JLabel("Choose the complete saved version to use on both sides. Previous files are retained."), BorderLayout.NORTH);
+            content.add(new JLabel("<html>Choose the saved rules and bounties to use on all computers. Previous files are retained.<br>"
+                    + "For an older shared file, applying your choice also upgrades it for syncing.</html>"), BorderLayout.NORTH);
             content.add(versions);
             content.add(new JLabel("Unsaved table edits are not included. Both rules and bounties will reload after applying."), BorderLayout.SOUTH);
             int choice = JOptionPane.showOptionDialog(owner, content, "Review shared rates", JOptionPane.DEFAULT_OPTION,

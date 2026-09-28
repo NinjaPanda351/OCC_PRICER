@@ -76,12 +76,14 @@ public class TradeReceivingExportService {
         SHARED_FOLDER_EXECUTOR.submit(() -> {
             try {
                 Path local=com.cardpricer.util.AppDataDirectory.trades().toPath();
+                var repository=TradeHistoryService.repository(local.toString());
+                int deletionPending=new TradeDeletionService(repository,local,Path.of(shared)).sync().pending();
                 var sync=new SharedFolderSyncService(com.cardpricer.util.AppDataDirectory.root().toPath().resolve("ledger/trades.sqlite"));
                 try (var files=Files.list(local)) {
-                    for (Path file:files.filter(Files::isRegularFile).toList())
+                    for (Path file:files.filter(Files::isRegularFile).filter(p->p.getFileName().toString().matches("(?i).+\\.(csv|txt|json|pdf)")).toList())
                         sync.enqueue(file,Path.of(shared).resolve(file.getFileName()));
                 }
-                int pending=sync.retry(FORCE_RETRY.getAndSet(false));
+                int pending=deletionPending+sync.retry(FORCE_RETRY.getAndSet(false));
                 pending+=SharedTradeService.retrySharedOutputs(Path.of(shared));
                 sharedSyncStatus=pending==0 ? "synced" : pending+" output(s) pending sync or in conflict";
             } catch (Exception e) { sharedSyncStatus="pending sync: "+e.getMessage(); }

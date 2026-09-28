@@ -97,13 +97,16 @@ public final class InventoryStatusSyncService {
         EXECUTOR.execute(() -> {
             try {
                 String shared=com.cardpricer.gui.panel.PreferencesPanel.getSharedTradesFolder();
+                var repository=new TradeRepository(AppDataDirectory.root().toPath().resolve("ledger/trades.sqlite"));
+                var deleted=new TradeDeletionService(repository,AppDataDirectory.trades().toPath(),
+                        shared==null || shared.isBlank() ? null : Path.of(shared)).sync();
                 if (shared==null || shared.isBlank()) { status="POS status: local only (no shared folder)";return; }
                 status="POS status: syncing...";
-                var repository=new TradeRepository(AppDataDirectory.root().toPath().resolve("ledger/trades.sqlite"));
                 Result result=new InventoryStatusSyncService(repository).sync(Path.of(shared));
                 if (result.imported()>0) GENERATION.incrementAndGet();
                 status=result.errors()==0 ? "POS status: synced with shared folder"
                         : "POS status: "+result.errors()+" shared update(s) need retry or review";
+                if(deleted.pending()>0) status+="; trade deletions pending";
             } catch (Exception failure) {
                 status="POS status: saved locally; network sync pending";
             } finally {

@@ -71,6 +71,9 @@ import java.util.function.BiConsumer;
  */
 public class TradePanel extends JPanel {
 
+    // Old keys also contained automatic layout widths; start from the original proportions.
+    private static final String COLUMN_WIDTH_PREF = "trade.table.manual.col.";
+
     // Help dialog content
     private static final String   HELP_TITLE = "Trade Panel — Help";
     private static final String[] HELP_COLS  = {"Shortcut / Code", "Description"};
@@ -538,10 +541,6 @@ public class TradePanel extends JPanel {
         cardTable = new com.cardpricer.gui.EmptyStateTable(tableModel, "Your next trade starts here", "Add a card code above, search by name, or paste a list.");
         AppTheme.styleTable(cardTable);
         cardTable.setFont(cardTable.getFont().deriveFont(14f));
-        cardTable.getColumnModel().getColumn(0).setMaxWidth(com.formdev.flatlaf.util.UIScale.scale(48));
-        cardTable.getColumnModel().getColumn(3).setMaxWidth(com.formdev.flatlaf.util.UIScale.scale(120));
-        cardTable.getColumnModel().getColumn(4).setMaxWidth(com.formdev.flatlaf.util.UIScale.scale(80));
-        for (int column : new int[]{5, 6, 7}) cardTable.getColumnModel().getColumn(column).setMaxWidth(com.formdev.flatlaf.util.UIScale.scale(150));
         cardTable.getColumnModel().getColumn(0).setPreferredWidth(40);  // Checkbox
         cardTable.getColumnModel().getColumn(1).setPreferredWidth(120); // Code
         cardTable.getColumnModel().getColumn(2).setPreferredWidth(280); // Card Name
@@ -719,10 +718,11 @@ public class TradePanel extends JPanel {
         // F7: Persist column widths whenever the user resizes a column
         cardTable.getColumnModel().addColumnModelListener(new TableColumnModelListener() {
             @Override public void columnMarginChanged(ChangeEvent e) {
+                if (cardTable.getTableHeader().getResizingColumn() == null) return;
                 Preferences prefs = Preferences.userNodeForPackage(PreferencesPanel.class);
                 for (int i = 0; i < cardTable.getColumnCount(); i++) {
-                    prefs.putInt("trade.table.col." + i,
-                            cardTable.getColumnModel().getColumn(i).getWidth());
+                    var column = cardTable.getColumnModel().getColumn(i);
+                    prefs.putInt(COLUMN_WIDTH_PREF + column.getModelIndex(), column.getWidth());
                 }
             }
             @Override public void columnAdded(TableColumnModelEvent e) {}
@@ -786,7 +786,7 @@ public class TradePanel extends JPanel {
             }
         });
 
-        JScrollPane scrollPane = new com.cardpricer.gui.ResponsiveTableScroll(cardTable, 34, 88, 170, 78, 48, 85, 85, 94);
+        JScrollPane scrollPane = new JScrollPane(cardTable);
         scrollPane.setBorder(AppTheme.cardBorder(0));
         scrollPane.setColumnHeaderView(cardTable.getTableHeader());
         JPanel tableHeading = AppTheme.transparent(new BorderLayout());
@@ -2073,11 +2073,11 @@ public class TradePanel extends JPanel {
     // F7: Column width memory
     // -------------------------------------------------------------------------
 
-    /** Restores saved column widths from Preferences. */
+    /** Restores only widths saved by manually resizing a column. */
     private void restoreColumnWidths() {
         Preferences prefs = Preferences.userNodeForPackage(PreferencesPanel.class);
         for (int i = 0; i < cardTable.getColumnCount(); i++) {
-            int w = prefs.getInt("trade.table.col." + i, -1);
+            int w = prefs.getInt(COLUMN_WIDTH_PREF + cardTable.getColumnModel().getColumn(i).getModelIndex(), -1);
             if (w > 0) cardTable.getColumnModel().getColumn(i).setPreferredWidth(w);
         }
     }
