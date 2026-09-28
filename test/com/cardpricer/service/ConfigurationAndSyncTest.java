@@ -59,6 +59,101 @@ class ConfigurationAndSyncTest {
         assertThrows(java.io.IOException.class,()->repository.resolve(review,RateConfigurationRepository.Choice.LOCAL));
         assertEquals(newer,Files.readString(shared));
     }
+    @Test void legacySharedRatesRequireAnActionableReviewEvenOnANewComputer() throws Exception {
+        Path shared=temp.resolve("shared.json");
+        String legacy=config("0.6").toString(); Files.writeString(shared,legacy);
+        var repository=new RateConfigurationRepository(temp.resolve("new/rates.json"));
+        String status=repository.sync(shared);
+        assertTrue(status.startsWith("conflict")); assertTrue(status.contains("Review shared rates"));
+        assertEquals(legacy,Files.readString(shared)); assertFalse(Files.exists(repository.path()));
+        repository.resolve(repository.review(shared),RateConfigurationRepository.Choice.SHARED);
+        assertEquals("synced",repository.sync(shared));
+        assertFalse(repository.read().getString("revision").isBlank());
+    }
+    @Test void importedBountiesCanMigrateLegacyShareAndOtherComputersCatchUp() throws Exception {
+        Path shared=temp.resolve("shared.json");
+        String legacy=config("0.6").toString(); Files.writeString(shared,legacy);
+        Path local=temp.resolve("A.json"),other=temp.resolve("B.json");
+        Files.writeString(local,legacy);Files.writeString(other,legacy);
+        var service=new BuyRateService(local);
+        Path csv=temp.resolve("bounties.csv"); Files.writeString(csv,"CARD NAME,CREDIT PERCENT,CHECK PERCENT\nNew bounty,80,60\n");
+        service.saveBounties(service.parseBountyCsv(csv.toFile()));
+        var repository=new RateConfigurationRepository(local);
+        String saved=Files.readString(local);
+        assertTrue(repository.sync(shared).startsWith("conflict"));
+        assertEquals(saved,Files.readString(local)); assertEquals(legacy,Files.readString(shared));
+        repository.resolve(repository.review(shared),RateConfigurationRepository.Choice.LOCAL);
+        assertEquals("synced",new RateConfigurationRepository(other).sync(shared));
+        assertEquals("New bounty",new BuyRateService(other).getBounties().getFirst().cardName);
+        assertEquals(legacy,Files.readString(shared.resolveSibling("shared.json.previous")));
+    }
+    @Test void cleanComputerCatchesUpAfterMissingSeveralSharedUpdates() throws Exception {
+        Path shared=temp.resolve("shared.json");
+        var writer=new RateConfigurationRepository(temp.resolve("A.json"));
+        var reader=new RateConfigurationRepository(temp.resolve("B.json"));
+        writer.save("",config("0.5"));writer.sync(shared);reader.sync(shared);
+        for(String rate:List.of("0.6","0.7","0.8")) {
+            writer.save(writer.read().getString("revision"),config(rate));assertEquals("synced",writer.sync(shared));
+        }
+        assertEquals("synced",reader.sync(shared));
+        assertEquals(writer.read().getString("revision"),reader.read().getString("revision"));
+        assertEquals("0.8",reader.read().getJSONArray("rules").getJSONObject(0).getString("creditRate"));
+    }
+    @Test void acceptingVersionedSharedRatesDoesNotCreateAnotherConflictForOtherComputers() throws Exception {
+        Path shared=temp.resolve("shared.json");
+        var first=new RateConfigurationRepository(temp.resolve("A.json"));
+        var second=new RateConfigurationRepository(temp.resolve("B.json"));
+        first.save("",config("0.5"));first.sync(shared);second.sync(shared);
+        second.save(second.read().getString("revision"),config("0.8"));
+        String published=Files.readString(shared);
+        Path backup=shared.resolveSibling("shared.json.previous");Files.writeString(backup,"retained legacy backup");
+        second.resolve(second.review(shared),RateConfigurationRepository.Choice.SHARED);
+        assertEquals(published,Files.readString(shared));
+        assertEquals("retained legacy backup",Files.readString(backup));
+        first.save(first.read().getString("revision"),config("0.7"));
+        assertEquals("synced",first.sync(shared));assertEquals("synced",second.sync(shared));
+    }
+    @Test void pendingLocalEditsArePreservedWhenAnotherComputerPublishesSeveralUpdates() throws Exception {
+        Path shared=temp.resolve("shared.json");
+        var writer=new RateConfigurationRepository(temp.resolve("A.json"));
+        var offline=new RateConfigurationRepository(temp.resolve("B.json"));
+        writer.save("",config("0.5"));writer.sync(shared);offline.sync(shared);
+        offline.save(offline.read().getString("revision"),config("0.9"));
+        String pending=Files.readString(offline.path());
+        for(String rate:List.of("0.6","0.7")) {
+            writer.save(writer.read().getString("revision"),config(rate));writer.sync(shared);
+        }
+        String published=Files.readString(shared);
+        assertTrue(offline.sync(shared).startsWith("conflict"));
+        assertEquals(pending,Files.readString(offline.path())); assertEquals(published,Files.readString(shared));
+    }
+    @Test void sharedLockContentionRetriesWithoutAnEmptyErrorOrLostBounties() throws Exception {
+        Path shared=temp.resolve("shared.json");
+        var repository=new RateConfigurationRepository(temp.resolve("A.json"));
+        repository.save("",config("0.8"));
+        try(var channel=java.nio.channels.FileChannel.open(shared.resolveSibling("shared.json.lock"),StandardOpenOption.CREATE,StandardOpenOption.WRITE);
+            var held=channel.lock()) {
+            assertTrue(repository.sync(shared).contains("busy"));
+            assertTrue(repository.read().getBoolean("pending"));
+        }
+        assertEquals("synced",repository.sync(shared));
+    }
+    @Test void multipleServicesOnOneComputerCanPollTheSameLocalFile() throws Exception {
+        Path local=temp.resolve("A.json"),shared=temp.resolve("shared.json");
+        var first=new RateConfigurationRepository(local); var second=new RateConfigurationRepository(local);
+        first.save("",config("0.8"));
+        var start=new java.util.concurrent.CountDownLatch(1);
+        try(var executor=java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var polls=List.of(first,second).stream().map(repository->executor.submit(()->{
+                start.await();
+                for(int i=0;i<20;i++) assertEquals("synced",repository.sync(shared));
+                return true;
+            })).toList();
+            start.countDown();
+            for(var poll:polls) assertTrue(poll.get(10,java.util.concurrent.TimeUnit.SECONDS));
+        }
+        assertEquals(Files.readString(local),Files.readString(shared));
+    }
     @Test void reusedRevisionWithDifferentContentIsAConflict() throws Exception {
         Path shared=temp.resolve("shared.json");var repository=new RateConfigurationRepository(temp.resolve("rates.json"));
         repository.save("",config("0.8"));repository.sync(shared);

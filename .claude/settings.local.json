@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd C:\\\\Users\\\\faust\\\\source\\\\repos\\\\OCC_PRICER_Implementation:*)",
+      "Bash(grep:*)",
+      "Bash(cd:*)",
+      "WebSearch",
+      "Bash(tail:*)",
+      "Bash(cd:*3)"
+    ]
+  }
+}

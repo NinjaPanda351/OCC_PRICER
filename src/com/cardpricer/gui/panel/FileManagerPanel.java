@@ -5,6 +5,7 @@ import com.cardpricer.model.TradeRecord;
 import com.cardpricer.util.AppTheme;
 import com.cardpricer.service.ReceiptPrintService;
 import com.cardpricer.service.TradeHistoryService;
+import com.cardpricer.service.TradeDeletionService;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -47,7 +48,7 @@ public class FileManagerPanel extends JPanel {
         {"Open",            "Open the file with your default application"},
         {"Copy to Local",   "Copy a shared file into local storage"},
         {"Copy file path",  "Copy full CSV paths; History copies the selected trade's CSV import"},
-        {"Delete",          "Permanently remove the selected file"},
+        {"Delete",          "Remove selected trades and their files everywhere; other exports are deleted locally"},
         {"--- History", ""},
         {"Search",          "Search all trade history by customer, date, or receipt text"},
         {"Load 100 more",   "Show older trades; totals include all matching trades"},
@@ -80,6 +81,9 @@ public class FileManagerPanel extends JPanel {
     private JButton editTradeButton;
     private JButton revisionHistoryButton;
     private JButton histPrintBtn, histPdfBtn, historyLoadMore;
+    private JButton deleteTradeButton;
+    private boolean deletionPending;
+    private long fileListGeneration,sharedFileListGeneration;
     private boolean inventorySavePending;
     private JLabel inventorySyncLabel;
     private boolean historyRefreshRunning;
@@ -282,6 +286,9 @@ public class FileManagerPanel extends JPanel {
         btnPanel.add(createCopyPathButton(sharedTable,
                 row -> (String) sharedTableModel.getValueAt(row, 4), sharedStatusLabel));
         btnPanel.add(copyBtn);
+        JButton deleteShared=AppTheme.dangerButton("Delete Selected");
+        deleteShared.addActionListener(e->deleteFiles(sharedTable,sharedTableModel));
+        btnPanel.add(deleteShared);
 
         tab.add(header, BorderLayout.NORTH);
         tab.add(scroll,  BorderLayout.CENTER);
@@ -290,6 +297,7 @@ public class FileManagerPanel extends JPanel {
     }
 
     private void refreshSharedFileList() {
+        long generation=++sharedFileListGeneration;
         sharedTableModel.setRowCount(0);
         String path = PreferencesPanel.getSharedTradesFolder();
         if (path == null || path.isBlank()) {
@@ -302,14 +310,17 @@ public class FileManagerPanel extends JPanel {
         // block for 30+ seconds when the host is on a different network segment.
         new SwingWorker<List<Object[]>, Void>() {
             @Override
-            protected List<Object[]> doInBackground() {
+            protected List<Object[]> doInBackground() throws Exception {
                 File dir = new File(path);
                 if (!dir.exists() || !dir.isDirectory()) return null;
+                var deletions=deletionService(path);deletions.sync();
+                var deleted=deletions.deletedFileNames();
                 SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
                 File[] files = dir.listFiles(FileManagerPanel::isCsvImport);
                 List<Object[]> rows = new ArrayList<>();
                 if (files != null) {
                     for (File f : files) {
+                        if(deleted.contains(f.getName().toLowerCase(java.util.Locale.ROOT))) continue;
                         rows.add(new Object[]{
                                 f.getName(),
                                 "CSV",
@@ -323,6 +334,7 @@ public class FileManagerPanel extends JPanel {
             }
             @Override
             protected void done() {
+                if(generation!=sharedFileListGeneration) return;
                 List<Object[]> rows;
                 try { rows = get(); } catch (Exception ex) { rows = null; }
                 if (rows == null) {
@@ -360,20 +372,18 @@ public class FileManagerPanel extends JPanel {
         int modelRow = sharedTable.convertRowIndexToModel(row);
         String srcPath = (String) sharedTableModel.getValueAt(modelRow, 4);
         String filename = (String) sharedTableModel.getValueAt(modelRow, 0);
-        File src  = new File(srcPath);
-        File localDir = com.cardpricer.util.AppDataDirectory.trades();
-        if (!localDir.exists()) localDir.mkdirs();
-        File dest = new File(localDir, filename);
-        try {
-            Files.copy(src.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            JOptionPane.showMessageDialog(this,
-                    "Copied to local folder:\n" + dest.getAbsolutePath(),
-                    "Copy Complete", JOptionPane.INFORMATION_MESSAGE);
-            refreshFileList(); // refresh local tab
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(this,
-                    "Failed to copy file: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
-        }
+        String shared=PreferencesPanel.getSharedTradesFolder();
+        new SwingWorker<Void,Void>() {
+            protected Void doInBackground() throws Exception {
+                deletionService(shared).copyToLocal(Path.of(srcPath));return null;
+            }
+            protected void done() {
+                try {
+                    get();JOptionPane.showMessageDialog(FileManagerPanel.this,"Copied to local folder: "+filename,"Copy Complete",JOptionPane.INFORMATION_MESSAGE);
+                    refreshFileList();
+                } catch(Exception failure) { JOptionPane.showMessageDialog(FileManagerPanel.this,errorMessage(failure),"Could not copy file",JOptionPane.ERROR_MESSAGE); }
+            }
+        }.execute();
     }
 
     // ── Local Files Tab ───────────────────────────────────────────────────────
@@ -495,13 +505,14 @@ public class FileManagerPanel extends JPanel {
     }
 
     private void refreshFileList() {
+        long generation=++fileListGeneration;
         tableModel.setRowCount(0);
         statusLabel.setText("Loading files…");
         final String selectedCategory = (String) categoryCombo.getSelectedItem();
 
         new SwingWorker<List<Object[]>, Void>() {
             @Override
-            protected List<Object[]> doInBackground() {
+            protected List<Object[]> doInBackground() throws Exception {
                 List<File> files = new ArrayList<>();
                 if ("All Files".equals(selectedCategory)) {
                     files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.tradesPath()));
@@ -518,8 +529,12 @@ public class FileManagerPanel extends JPanel {
                     files.addAll(getFilesFromDirectory(com.cardpricer.util.AppDataDirectory.combinedFilesPath()));
                 }
                 SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                var deleted=deletionService("").deletedFileNames();
+                Path trades=com.cardpricer.util.AppDataDirectory.trades().toPath().toAbsolutePath().normalize();
                 List<Object[]> rows = new ArrayList<>();
                 for (File file : files) {
+                    if(file.toPath().toAbsolutePath().normalize().getParent().equals(trades)
+                            && deleted.contains(file.getName().toLowerCase(java.util.Locale.ROOT))) continue;
                     if (file.isFile()) {
                         rows.add(new Object[]{
                                 file.getName(), "CSV",
@@ -533,6 +548,7 @@ public class FileManagerPanel extends JPanel {
             }
             @Override
             protected void done() {
+                if(generation!=fileListGeneration) return;
                 try {
                     List<Object[]> rows = get();
                     for (Object[] row : rows) tableModel.addRow(row);
@@ -695,6 +711,10 @@ public class FileManagerPanel extends JPanel {
         revisionHistoryButton.setEnabled(false);
         revisionHistoryButton.addActionListener(e -> showRevisionHistory());
         previewBtns.add(revisionHistoryButton);
+        deleteTradeButton=AppTheme.dangerButton("Delete trade");
+        deleteTradeButton.setEnabled(false);
+        deleteTradeButton.addActionListener(e->deleteHistoryTrade());
+        previewBtns.add(deleteTradeButton);
         previewBtns.add(histPrintBtn);
         previewBtns.add(histPdfBtn);
         previewBtns.add(histOpenBtn);
@@ -756,7 +776,7 @@ public class FileManagerPanel extends JPanel {
     private void refreshHistoryList() { refreshHistoryList(true); }
 
     private void refreshHistoryList(boolean requestSync) {
-        if (historyRefreshRunning || inventorySavePending) {
+        if (historyRefreshRunning || inventorySavePending || deletionPending) {
             if(requestSync) historyRefreshRequested=true;
             return;
         }
@@ -937,11 +957,13 @@ public class FileManagerPanel extends JPanel {
     }
 
     private void updateReceiptActions(TradeRecord record,boolean ready) {
+        boolean busy=inventorySavePending || deletionPending;
         inventoriedCheck.setSelected(record!=null && record.inventoried);
-        inventoriedCheck.setEnabled(record!=null && !inventorySavePending);
-        editTradeButton.setEnabled(record!=null && !inventorySavePending && (record.tradeId!=null || ready));
-        revisionHistoryButton.setEnabled(record!=null && record.tradeId!=null);
-        histPrintBtn.setEnabled(record!=null && ready);histPdfBtn.setEnabled(record!=null && ready);
+        inventoriedCheck.setEnabled(record!=null && !busy);
+        editTradeButton.setEnabled(record!=null && !busy && (record.tradeId!=null || ready));
+        revisionHistoryButton.setEnabled(record!=null && record.tradeId!=null && !busy);
+        deleteTradeButton.setEnabled(record!=null && !busy);
+        histPrintBtn.setEnabled(record!=null && ready && !busy);histPdfBtn.setEnabled(record!=null && ready && !busy);
     }
 
     private void saveInventoryStatus() {
@@ -1198,58 +1220,83 @@ public class FileManagerPanel extends JPanel {
         }
     }
 
-    private void deleteSelected() {
-        int[] selectedRows = fileTable.getSelectedRows();
+    private static TradeDeletionService deletionService(String shared) throws Exception {
+        Path local=com.cardpricer.util.AppDataDirectory.trades().toPath();
+        return new TradeDeletionService(TradeHistoryService.repository(local.toString()),local,
+                shared==null || shared.isBlank() ? null : Path.of(shared));
+    }
 
-        if (selectedRows.length == 0) {
-            JOptionPane.showMessageDialog(this,
-                    "Please select files to delete",
-                    "No Selection",
-                    JOptionPane.WARNING_MESSAGE);
-            return;
+    private void deleteSelected() { deleteFiles(fileTable,tableModel); }
+
+    private void deleteFiles(JTable table,DefaultTableModel model) {
+        if(deletionPending || inventorySavePending) return;
+        List<Path> paths=new ArrayList<>();
+        for(int row:table.getSelectedRows()) paths.add(Path.of((String)model.getValueAt(table.convertRowIndexToModel(row),4)).toAbsolutePath().normalize());
+        if(paths.isEmpty()) {
+            JOptionPane.showMessageDialog(this,"Please select files to delete","No Selection",JOptionPane.WARNING_MESSAGE);return;
         }
-
-        int confirm = JOptionPane.showConfirmDialog(this,
-                String.format(java.util.Locale.ROOT, "Delete %d selected file(s)?\n\nThis cannot be undone!",
-                        selectedRows.length),
-                "Confirm Delete",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.WARNING_MESSAGE);
-
-        if (confirm != JOptionPane.YES_OPTION) {
-            return;
-        }
-
-        int successCount = 0;
-        int failCount = 0;
-
-        for (int selectedRow : selectedRows) {
-            try {
-                String filePath = (String) tableModel.getValueAt(fileTable.convertRowIndexToModel(selectedRow), 4);
-                File file = new File(filePath);
-
-                if (file.delete()) {
-                    successCount++;
-                } else {
-                    failCount++;
-                }
-            } catch (Exception e) {
-                failCount++;
-                e.printStackTrace();
+        String shared=PreferencesPanel.getSharedTradesFolder();
+        Path local=com.cardpricer.util.AppDataDirectory.trades().toPath().toAbsolutePath().normalize();
+        Path sharedRoot=shared==null || shared.isBlank() ? null : Path.of(shared).toAbsolutePath().normalize();
+        boolean includesTrades=paths.stream().anyMatch(p->p.getParent().equals(local) || p.getParent().equals(sharedRoot));
+        String message="Delete "+paths.size()+" selected file(s)?\n\n"+(includesTrades
+                ? "Selected trades, all their revisions, and their CSV/receipt files will be removed from History, this computer, and the shared folder.\nOther computers remove their copies when they sync. Offline deletions will be retried.\nOther selected exports are deleted locally.\n\n"
+                : "")+"This cannot be undone.";
+        if(JOptionPane.showConfirmDialog(this,message,"Confirm Delete",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE)!=JOptionPane.YES_OPTION) return;
+        beginDeletion();
+        new SwingWorker<String,Void>() {
+            protected String doInBackground() throws Exception {
+                var service=deletionService(shared);
+                int deleted=0,pending=0;List<String> failures=new ArrayList<>();
+                for(Path path:paths) try {
+                    if(path.getParent().equals(local) || path.getParent().equals(sharedRoot)) pending+=service.deleteFile(path).pending();
+                    else Files.deleteIfExists(path);
+                    deleted++;
+                } catch(Exception failure) { failures.add(path.getFileName()+": "+errorMessage(failure)); }
+                return "Deleted: "+deleted+" selection(s)."+(pending>0 ? " Cleanup or shared sync is pending; the app will retry." : "")
+                        +(failures.isEmpty() ? "" : "\n\nCould not delete:\n"+String.join("\n",failures));
             }
-        }
+            protected void done() { finishDeletion(this); }
+        }.execute();
+    }
 
-        String message = String.format(java.util.Locale.ROOT, "Delete complete!\n\n" +
-                        "Deleted: %d file(s)\n" +
-                        "Failed: %d file(s)",
-                successCount, failCount);
+    private void deleteHistoryTrade() {
+        TradeRecord record=selectedRecord();
+        if(record==null || deletionPending || inventorySavePending) return;
+        String message="Delete the trade for "+record.customerName+" ("+record.date.format(HISTORY_DATE_FMT)+")?\n\n"
+                +"This removes all revisions and CSV/receipt files from History, this computer, and the shared folder.\n"
+                +"Other computers remove their copies when they sync. Offline deletions will be retried.\n\nThis cannot be undone.";
+        if(JOptionPane.showConfirmDialog(this,message,"Delete trade everywhere",JOptionPane.YES_NO_OPTION,JOptionPane.WARNING_MESSAGE)!=JOptionPane.YES_OPTION) return;
+        String shared=PreferencesPanel.getSharedTradesFolder();
+        beginDeletion();
+        new SwingWorker<String,Void>() {
+            protected String doInBackground() throws Exception {
+                var result=deletionService(shared).delete(record);
+                return result.pending()==0 ? "Trade deleted." : "Trade deleted. Cleanup or shared sync is pending; the app will retry.";
+            }
+            protected void done() { finishDeletion(this); }
+        }.execute();
+    }
 
-        JOptionPane.showMessageDialog(this,
-                message,
-                "Delete Complete",
-                JOptionPane.INFORMATION_MESSAGE);
+    private void beginDeletion() {
+        deletionPending=true;historyGeneration++;previewGeneration++;searchGeneration++;
+        fileListGeneration++;sharedFileListGeneration++;
+        historySearchTimer.stop();
+        if(previewWorker!=null) previewWorker.cancel(true);
+        if(searchWorker!=null) searchWorker.cancel(true);
+        updateReceiptActions(selectedRecord(),false);
+        historyStatusLabel.setText("Deleting...");
+    }
 
-        // Refresh the file list
+    private void finishDeletion(SwingWorker<String,Void> worker) {
+        deletionPending=false;
+        historyTable.clearSelection();contentCache.clear();historySnapshot=null;
+        completedHistoryQuery=null;
+        try { JOptionPane.showMessageDialog(this,worker.get(),"Delete complete",JOptionPane.INFORMATION_MESSAGE); }
+        catch(Exception failure) { JOptionPane.showMessageDialog(this,errorMessage(failure),"Could not delete",JOptionPane.ERROR_MESSAGE); }
         refreshFileList();
+        if(tabs.getSelectedIndex()==1) refreshSharedFileList();
+        refreshHistoryList();
+        com.cardpricer.service.InventoryStatusSyncService.requestSync();
     }
 }

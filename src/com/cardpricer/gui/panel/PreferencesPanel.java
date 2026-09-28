@@ -145,6 +145,13 @@ public class PreferencesPanel extends JPanel {
     private DefaultTableModel bountyTableModel;
     private JTable bountyTable;
     private JLabel bountiesStatusLabel;
+    private JLabel ratesSyncStatusLabel;
+    private boolean ratesSyncPending;
+    private int ratesSyncTicks;
+    private final Timer ratesSyncTimer = new Timer(1000, e -> {
+        updateRatesSyncStatus();
+        if (++ratesSyncTicks >= 15) requestRatesSync();
+    });
 
     /** Constructs the preferences panel and initialises the Appearance and Network tabs. */
     public PreferencesPanel() {
@@ -153,6 +160,45 @@ public class PreferencesPanel extends JPanel {
 
         add(createTopPanel(), BorderLayout.NORTH);
         add(createTabbedSettings(), BorderLayout.CENTER);
+    }
+
+    @Override public void addNotify() {
+        super.addNotify();
+        requestRatesSync();
+        ratesSyncTimer.start();
+    }
+
+    @Override public void removeNotify() {
+        ratesSyncTimer.stop();
+        super.removeNotify();
+    }
+
+    private void requestRatesSync() {
+        if (ratesSyncPending) return;
+        ratesSyncPending=true;
+        ratesSyncTicks=0;
+        new SwingWorker<Void,Void>() {
+            protected Void doInBackground() { buyRateService.pollSharedFolder(); return null; }
+            protected void done() { ratesSyncPending=false; updateRatesSyncStatus(); }
+        }.execute();
+    }
+
+    private void updateRatesSyncStatus() {
+        if (ratesSyncStatusLabel==null) return;
+        String status=buyRateService.getSyncStatus();
+        ratesSyncStatusLabel.setText("Shared rates: "+status);
+        ratesSyncStatusLabel.setToolTipText(status);
+        ratesSyncStatusLabel.setForeground(status.startsWith("conflict") || status.startsWith("pending")
+                ? AppTheme.color("Component.warning.focusedBorderColor", new Color(0xB9770E)) : UIManager.getColor("Label.foreground"));
+    }
+
+    private void reviewSharedRates() {
+        com.cardpricer.gui.dialog.RateConflictDialog.show(this, buyRateService, () -> {
+            loadRulesIntoTable(); loadBountiesIntoTable();
+            buyRatesStatusLabel.setText("Saved rates reloaded.");
+            bountiesStatusLabel.setText("Saved bounties reloaded.");
+            updateRatesSyncStatus();
+        });
     }
 
     private JPanel createTopPanel() {
@@ -276,6 +322,7 @@ public class PreferencesPanel extends JPanel {
     private void saveSharedFolder() {
         String path = sharedFolderField.getText().trim();
         prefs.put(SHARED_FOLDER_KEY, path);
+        requestRatesSync();
         JOptionPane.showMessageDialog(this,
                 "Shared folder saved:\n" + (path.isEmpty() ? "(none)" : path),
                 "Saved", JOptionPane.INFORMATION_MESSAGE);
@@ -408,14 +455,15 @@ public class PreferencesPanel extends JPanel {
         JButton reloadRates=new JButton("Reload saved rates");
         reloadRates.addActionListener(e -> {
             com.cardpricer.gui.BackgroundOperation.run(this, "Reloading rates", buyRateService::reload, () -> {
-                loadRulesIntoTable(); loadBountiesIntoTable(); buyRatesStatusLabel.setText(buyRateService.getSyncStatus());
+                loadRulesIntoTable(); loadBountiesIntoTable();
+                buyRatesStatusLabel.setText("Saved rates reloaded.");
+                bountiesStatusLabel.setText("Saved bounties reloaded.");
+                requestRatesSync();
             });
         });
         rulesBtns.add(reloadRates);
         JButton resolveRates = new JButton("Review shared rates…");
-        resolveRates.addActionListener(e -> com.cardpricer.gui.dialog.RateConflictDialog.show(this, buyRateService, () -> {
-            loadRulesIntoTable(); loadBountiesIntoTable(); buyRatesStatusLabel.setText(buyRateService.getSyncStatus());
-        }));
+        resolveRates.addActionListener(e -> reviewSharedRates());
         rulesBtns.add(resolveRates);
         rulesBtns.add(buyRatesStatusLabel);
         rulesSection.add(rulesBtns, BorderLayout.SOUTH);
@@ -498,6 +546,9 @@ public class PreferencesPanel extends JPanel {
         bountyBtns.add(importCsvBtn);
         bountyBtns.add(exportCsvBtn);
         bountyBtns.add(saveBountiesBtn);
+        JButton reviewBountiesBtn=new JButton("Review shared rates…");
+        reviewBountiesBtn.addActionListener(e -> reviewSharedRates());
+        bountyBtns.add(reviewBountiesBtn);
         bountyBtns.add(bountiesStatusLabel);
         bountySection.add(bountyBtns, BorderLayout.SOUTH);
 
@@ -511,6 +562,16 @@ public class PreferencesPanel extends JPanel {
         bountySection.setAlignmentX(Component.LEFT_ALIGNMENT);
         bountySection.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
+        JPanel syncPanel=new JPanel(new com.cardpricer.gui.WrapLayout(FlowLayout.LEFT,8,0));
+        ratesSyncStatusLabel=new JLabel();
+        updateRatesSyncStatus();
+        JButton syncRatesBtn=new JButton("Sync now");
+        syncRatesBtn.addActionListener(e -> requestRatesSync());
+        syncPanel.add(syncRatesBtn);
+        syncPanel.add(ratesSyncStatusLabel);
+        syncPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        panel.add(syncPanel);
+        panel.add(Box.createVerticalStrut(12));
         panel.add(rulesSection);
         panel.add(Box.createVerticalStrut(12));
         panel.add(bountySection);
@@ -564,7 +625,8 @@ public class PreferencesPanel extends JPanel {
         }
 
         com.cardpricer.gui.BackgroundOperation.run(this, "Saving rates", () -> buyRateService.saveRules(newRules), () -> {
-            buyRatesStatusLabel.setText(buyRateService.getSyncStatus());
+            buyRatesStatusLabel.setText("Rules saved on this computer.");
+            updateRatesSyncStatus();
             buyRatesStatusLabel.setForeground(new Color(0, 150, 0));
         });
     }
@@ -767,7 +829,8 @@ public class PreferencesPanel extends JPanel {
         }
         com.cardpricer.gui.BackgroundOperation.run(this, "Saving bounties", () -> buyRateService.saveBounties(newBounties), () -> {
             loadBountiesIntoTable();
-            bountiesStatusLabel.setText(buyRateService.getSyncStatus());
+            bountiesStatusLabel.setText("Bounties saved on this computer.");
+            updateRatesSyncStatus();
             bountiesStatusLabel.setForeground(new Color(0, 150, 0));
         });
     }

@@ -92,7 +92,11 @@ public final class SharedTradeService {
         try (FileChannel channel=FileChannel.open(directory.resolve(id+".lock"),StandardOpenOption.CREATE,StandardOpenOption.WRITE)) {
             try (var lock=channel.tryLock()) {
                 if (lock==null) throw busy();
-                return operation.run();
+                return TradeDeletionService.withSharedLock(shared,()->{
+                    repository.requireActive(id);
+                    if(TradeDeletionService.isSharedDeleted(shared,"trade:"+id,null)) throw new IOException("This trade was deleted on another computer");
+                    return operation.run();
+                });
             } catch (OverlappingFileLockException busy) { throw busy(); }
         }
     }
@@ -214,8 +218,10 @@ public final class SharedTradeService {
 
     /** Idempotent, immutable exports. The shared document is also the durable retry queue. */
     private static int publish(JSONObject document, Path shared) throws IOException {
+        if(TradeDeletionService.isSharedDeleted(shared,"trade:"+document.getString("id"),null)) return 0;
         int pending=0;
         for (Object value:document.getJSONArray("versions")) for (var job:jobs((JSONObject)value)) {
+            if(TradeDeletionService.isSharedDeleted(shared,null,job.name())) continue;
             Path destination=shared.resolve(job.name());
             try {
                 if (!Files.isDirectory(shared)) throw new IOException("Shared folder unavailable");
@@ -233,7 +239,10 @@ public final class SharedTradeService {
     }
     public static int retrySharedOutputs(Path shared) throws IOException {
         int pending=0;
-        for (JSONObject document:documents(shared)) pending+=publish(document,shared);
+        for (JSONObject document:documents(shared)) try {
+            pending+=TradeDeletionService.withSharedLock(shared,()->publish(document,shared));
+        } catch(IOException failure) { throw failure; }
+        catch(Exception failure) { throw new IOException("Could not retry shared trade files",failure); }
         return pending;
     }
     private static List<JSONObject> documents(Path shared) throws IOException {
@@ -243,6 +252,7 @@ public final class SharedTradeService {
         try (var files=Files.list(directory)) {
             for (Path file:files.filter(p -> p.getFileName().toString().endsWith(".json")).toList()) {
                 String name=file.getFileName().toString();
+                if(TradeDeletionService.isSharedDeleted(shared,"trade:"+name.substring(0,name.length()-5),null)) continue;
                 try { result.add(readDocument(file,UUID.fromString(name.substring(0,name.length()-5)))); }
                 catch (IllegalArgumentException invalid) { throw new IOException("Invalid shared trade filename: "+name,invalid); }
             }
@@ -281,6 +291,7 @@ public final class SharedTradeService {
         return new HistoryIndex.Loaded(record,receipt.content());
     }
     public static String receipt(Path shared, UUID id, long revision) throws IOException {
+        if(TradeDeletionService.isSharedDeleted(shared,"trade:"+id,null)) return null;
         Path file=documentPath(shared,id);
         if (!Files.exists(file)) return null;
         for (Object value:readDocument(file,id).getJSONArray("versions")) {

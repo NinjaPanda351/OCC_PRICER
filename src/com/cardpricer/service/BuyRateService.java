@@ -177,9 +177,9 @@ public class BuyRateService {
 
     /** Background revision-checked sync. Publishes snapshots without replacing an open editor. */
     public void pollSharedFolder() {
-        if (!sharedEnabled) return;
+        if (!sharedEnabled) { syncStatus="saved locally"; return; }
         String path=preferences().get("shared.trades.folder", "");
-        if (path.isBlank()) return;
+        if (path.isBlank()) { syncStatus="saved locally (no shared folder)"; return; }
         try {
             syncStatus=repository.sync(java.nio.file.Path.of(path).resolve(SHARED_FILE));
             JSONObject data=repository.read();

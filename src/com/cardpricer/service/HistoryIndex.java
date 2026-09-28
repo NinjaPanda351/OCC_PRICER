@@ -51,9 +51,13 @@ final class HistoryIndex {
     }
     List<Entry> entries(String scope,String kind) throws SQLException {
         var result=new ArrayList<Entry>();
+        var deleted=new TradeDeletionStore(repository).snapshot();
         try (var c=repository.connect();var s=c.prepareStatement("SELECT source,stamp,metadata FROM history_entries WHERE scope=? AND kind=?")) {
             s.setString(1,scope);s.setString(2,kind);
-            try (var rows=s.executeQuery()) { while(rows.next()) result.add(new Entry(rows.getString(1),rows.getString(2),record(rows.getString(3)))); }
+            try (var rows=s.executeQuery()) { while(rows.next()) {
+                var record=record(rows.getString(3));
+                if(!deleted.contains(record)) result.add(new Entry(rows.getString(1),rows.getString(2),record));
+            } }
         }
         return result;
     }
@@ -79,6 +83,7 @@ final class HistoryIndex {
     static String scope(Path directory) { return directory.toAbsolutePath().normalize().toString(); }
 
     Scan scan(Path directory,String kind,Set<String> ignored,boolean keepOffline,Loader loader) throws Exception {
+        var deleted=new TradeDeletionStore(repository).snapshot();
         String scope=scope(directory);
         Map<String,Entry> old=new HashMap<>();for(var e:entries(scope,kind)) old.put(e.source(),e);
         var changed=new LinkedHashMap<String,Loaded>();var stamps=new HashMap<String,String>();
@@ -90,6 +95,7 @@ final class HistoryIndex {
             for(Path file:files) {
                 String name=file.getFileName().toString();
                 if (!name.endsWith(kind.equals("revision") ? ".json" : ".txt") || ignored.contains(name)) continue;
+                if(deleted.containsFile(name) || (kind.equals("revision") && deleted.keys().contains("trade:"+name.substring(0,name.length()-5)))) continue;
                 var attributes=Files.readAttributes(file,BasicFileAttributes.class);
                 if (!attributes.isRegularFile()) continue;
                 String source="file:"+file.toAbsolutePath().normalize();present.add(source);
